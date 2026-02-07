@@ -3,8 +3,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 type TimeSliderProps = {
   /** Currently selected day offset (0 = today, 1 = tomorrow, …, 6 = 6 days out) */
   value: number;
-  /** Called when the user changes the slider */
+  /** Called when the user releases the slider (commits the value — triggers data reload) */
   onChange: (dayOffset: number) => void;
+  /** Called live as the user drags (for lightweight UI previews like weather bar) */
+  onPreview?: (dayOffset: number) => void;
   /** Max days out (default 7, matching NWS forecast range) */
   maxDays?: number;
 };
@@ -27,7 +29,7 @@ function tickLabel(offset: number): string {
   return d.toLocaleDateString(undefined, { weekday: "short" });
 }
 
-export default function TimeSlider({ value, onChange, maxDays = 7 }: TimeSliderProps) {
+export default function TimeSlider({ value, onChange, onPreview, maxDays = 7 }: TimeSliderProps) {
   const days = useMemo(() => Array.from({ length: maxDays }, (_, i) => i), [maxDays]);
 
   // Keep a local value for smooth dragging, commit on release
@@ -37,8 +39,10 @@ export default function TimeSlider({ value, onChange, maxDays = 7 }: TimeSliderP
   useEffect(() => { if (!dragging) setLocalVal(value); }, [value, dragging]);
 
   const handleInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setLocalVal(Number(e.target.value));
-  }, []);
+    const v = Number(e.target.value);
+    setLocalVal(v);
+    onPreview?.(v);
+  }, [onPreview]);
 
   const handleCommit = useCallback(() => {
     setDragging(false);

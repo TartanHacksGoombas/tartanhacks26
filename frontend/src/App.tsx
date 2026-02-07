@@ -57,6 +57,8 @@ export default function App() {
   const { sidebarRef, weatherRef, padding } = useMapPadding();
   const [kind] = useState<SegmentKind>("road");
   const [dayOffset, setDayOffset] = useState(0);
+  // previewDay updates live during drag (for weather bar); dayOffset commits on release (for data reload)
+  const [previewDay, setPreviewDay] = useState(0);
   const [mapReady, setMapReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
@@ -276,7 +278,11 @@ export default function App() {
 
       {/* Time slider */}
       <div className="absolute top-4 z-20" style={{ left: "calc(320px + 2rem + 1rem)", right: "calc(500px + 2rem + 1rem)" }}>
-        <TimeSlider value={dayOffset} onChange={setDayOffset} />
+        <TimeSlider
+          value={dayOffset}
+          onChange={(d) => { setDayOffset(d); setPreviewDay(d); }}
+          onPreview={setPreviewDay}
+        />
       </div>
 
       <aside ref={sidebarRef} className="absolute left-4 top-4 z-10 w-[320px] max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-xl backdrop-blur">
@@ -322,9 +328,9 @@ export default function App() {
           <div>Visible segments: {totalVisible}</div>
           <div>
             {loading ? "Refreshing..." : "Map synced to viewport"}
-            {dayOffset > 0 && (
+            {previewDay > 0 && (
               <span className="ml-1 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-                +{dayOffset}d forecast
+                +{previewDay}d forecast
               </span>
             )}
           </div>
