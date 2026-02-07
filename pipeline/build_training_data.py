@@ -26,6 +26,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 DATASET_CSV = os.path.join(DATA_DIR, "dataset_prediction_ready.csv")
 STORM_EVENTS_CSV = os.path.join(DATA_DIR, "storm_events.csv")
 STORM_LABELS_CSV = os.path.join(DATA_DIR, "storm_labels.csv")
+STORM_DAYS_CSV = os.path.join(DATA_DIR, "storm_days.csv")
 
 # Output
 OUTPUT_PARQUET = os.path.join(DATA_DIR, "training_matrix.parquet")
@@ -193,8 +194,12 @@ def encode_static_features(df):
     return out
 
 
-def prepare_weather_features(storms_df):
-    """Extract per-storm weather features."""
+def prepare_weather_features(storms_df, storm_days_df=None):
+    """Extract per-storm weather features, optionally merged with per-day temporal features.
+
+    If storm_days_df is provided, the result has one row per (storm_id, day_offset)
+    with temporal features; otherwise one row per storm_id (legacy behavior).
+    """
     weather_cols = ["storm_id", "total_snowfall_cm", "max_daily_snowfall_cm",
                     "min_temp_c", "max_wind_kmh", "duration_days", "precip_total_mm",
                     "season"]
@@ -208,6 +213,20 @@ def prepare_weather_features(storms_df):
                 "max_wind_kmh", "duration_days", "precip_total_mm"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
+
+    # Merge temporal features from storm_days if available
+    if storm_days_df is not None and not storm_days_df.empty:
+        temporal_cols = ["storm_id", "day_offset", "daily_snowfall_cm",
+                         "cumulative_snowfall_cm", "days_since_peak_snowfall",
+                         "is_post_storm", "cumulative_thaw_degree_hours"]
+        avail_temporal = [c for c in temporal_cols if c in storm_days_df.columns]
+        days = storm_days_df[avail_temporal].copy()
+        for col in avail_temporal:
+            if col not in ("storm_id", "day_offset"):
+                days[col] = pd.to_numeric(days[col], errors="coerce").fillna(0)
+
+        out = out.merge(days, on="storm_id", how="inner")
+        print(f"  Merged temporal features: {len(out)} storm-day rows")
 
     return out
 
@@ -242,6 +261,16 @@ def main():
         print(f"Error: {STORM_LABELS_CSV} not found. Run build_labels.py first.")
         sys.exit(1)
 
+    # Load storm_days if available (temporal features from Part B)
+    storm_days = None
+    has_day_level = False
+    if os.path.exists(STORM_DAYS_CSV):
+        storm_days = pd.read_csv(STORM_DAYS_CSV)
+        has_day_level = True
+        print(f"  Storm days: {len(storm_days)} storm-day rows")
+    else:
+        print(f"  Storm days: NOT FOUND (temporal features will be skipped)")
+
     # ── Encode static features ────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print("Encoding static features...")
@@ -266,29 +295,48 @@ def main():
     print(f"\n{'='*60}")
     print("Preparing weather features...")
     print(f"{'='*60}")
-    weather = prepare_weather_features(storms)
+    weather = prepare_weather_features(storms, storm_days_df=storm_days)
     weather = downcast_floats(weather)
-    print(f"  Weather features: {len(weather)} storms")
+    print(f"  Weather features: {len(weather)} rows")
     print(f"  Columns: {', '.join(weather.columns)}")
 
-    # Build an objectid→static-row lookup dict for fast merging
-    static_dict = {row["objectid"]: row for _, row in static.iterrows()}
-    weather_dict = {row["storm_id"]: row for _, row in weather.iterrows()}
+    # Determine the merge key for labels ↔ weather
+    weather_merge_keys = ["storm_id"]
+    if has_day_level and "day_offset" in weather.columns:
+        weather_merge_keys = ["storm_id", "day_offset"]
+
+    # Temporal feature columns (Part B) — defined first so we can exclude from weather
+    temporal_feature_cols = []
+    if has_day_level:
+        temporal_feature_cols = [
+            "day_offset", "days_since_peak_snowfall", "is_post_storm",
+            "cumulative_snowfall_cm", "cumulative_thaw_degree_hours", "daily_snowfall_cm",
+        ]
 
     # Determine feature columns from a sample merge
     sample_static = static.drop(columns=["objectid"])
     sample_weather = weather.drop(columns=["storm_id"])
-    # season is metadata, not a feature
-    weather_feature_cols = [c for c in sample_weather.columns if c != "season"]
+    # Exclude metadata cols and temporal cols (listed separately) from weather features
+    non_feature_weather_cols = {"season", "day_offset"} | set(temporal_feature_cols)
+    weather_feature_cols = [c for c in sample_weather.columns if c not in non_feature_weather_cols]
     static_feature_cols = list(sample_static.columns)
+
     # Weather × segment interaction features (computed during chunked join)
     interaction_cols = [
         "snow_x_steep_slope", "snow_x_incline", "temp_x_bridge",
         "wind_x_roadwidth", "snow_x_elevation",
     ]
-    feature_cols = static_feature_cols + weather_feature_cols + interaction_cols
+    # Temporal × segment interaction features (Part B)
+    temporal_interaction_cols = []
+    if has_day_level:
+        temporal_interaction_cols = [
+            "thaw_x_steep_slope", "post_storm_x_elevation", "day_offset_x_snow",
+        ]
+
+    feature_cols = static_feature_cols + weather_feature_cols + temporal_feature_cols + interaction_cols + temporal_interaction_cols
     label_variant_cols = ["label_any_incident", "label_top_1pct", "label_top_5pct"]
-    all_cols = ["objectid", "storm_id", "risk_score"] + label_variant_cols + static_feature_cols + weather_feature_cols + interaction_cols + ["season"]
+    # day_offset is in temporal_feature_cols, so don't duplicate in id_cols
+    all_cols = ["objectid", "storm_id", "risk_score"] + label_variant_cols + static_feature_cols + weather_feature_cols + temporal_feature_cols + interaction_cols + temporal_interaction_cols + ["season"]
 
     del sample_static, sample_weather
 
@@ -317,7 +365,10 @@ def main():
         print(f"  Processing chunk {chunk_num} ({len(chunk)} rows)...")
 
         # Keep only the columns we need from labels
-        label_cols_needed = ["objectid", "storm_id", "risk_score"] + [
+        label_id_cols = ["objectid", "storm_id"]
+        if has_day_level and "day_offset" in chunk.columns:
+            label_id_cols.append("day_offset")
+        label_cols_needed = label_id_cols + ["risk_score"] + [
             c for c in label_variant_cols if c in chunk.columns
         ]
         label_chunk = chunk[label_cols_needed].copy()
@@ -325,8 +376,8 @@ def main():
         # Merge static features
         label_chunk = label_chunk.merge(static, on="objectid", how="inner")
 
-        # Merge weather features (includes season)
-        label_chunk = label_chunk.merge(weather, on="storm_id", how="inner")
+        # Merge weather features (includes season + temporal if available)
+        label_chunk = label_chunk.merge(weather, on=weather_merge_keys, how="inner")
 
         # Compute weather × segment interaction features
         snow_col = "total_snowfall_cm" if "total_snowfall_cm" in label_chunk.columns else None
@@ -367,6 +418,28 @@ def main():
             ).astype(np.float32)
         else:
             label_chunk["wind_x_roadwidth"] = np.float32(0)
+
+        # Compute temporal × segment interaction features (Part B)
+        if has_day_level:
+            thaw = label_chunk.get("cumulative_thaw_degree_hours", 0)
+            thaw = pd.to_numeric(thaw, errors="coerce").fillna(0)
+            label_chunk["thaw_x_steep_slope"] = (
+                thaw * label_chunk.get("near_steep_slope", 0)
+            ).astype(np.float32)
+
+            post_storm = label_chunk.get("is_post_storm", 0)
+            post_storm = pd.to_numeric(post_storm, errors="coerce").fillna(0)
+            label_chunk["post_storm_x_elevation"] = (
+                post_storm * label_chunk.get("elevation_m", 0) / 1000.0
+            ).astype(np.float32)
+
+            day_off = label_chunk.get("day_offset", 0)
+            day_off = pd.to_numeric(day_off, errors="coerce").fillna(0)
+            snow_val = label_chunk.get("total_snowfall_cm", 0)
+            snow_val = pd.to_numeric(snow_val, errors="coerce").fillna(0)
+            label_chunk["day_offset_x_snow"] = (
+                day_off * snow_val
+            ).astype(np.float32)
 
         # Ensure all feature columns are numeric and filled
         for col in feature_cols:

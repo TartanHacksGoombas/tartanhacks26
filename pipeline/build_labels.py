@@ -45,6 +45,7 @@ DOMI_CSV = os.path.join(DATA_DIR, "domi_closures_pgh.csv")
 # Outputs
 STORM_EVENTS_CSV = os.path.join(DATA_DIR, "storm_events.csv")
 STORM_LABELS_CSV = os.path.join(DATA_DIR, "storm_labels.csv")
+STORM_DAYS_CSV = os.path.join(DATA_DIR, "storm_days.csv")
 
 # Spatial join thresholds (meters)
 SPATIAL_311_M = 200
@@ -173,10 +174,95 @@ def detect_storms(weather_df):
     return storms_df
 
 
+def expand_storm_days(storms_df, weather_df):
+    """Expand each storm into per-day rows with temporal features.
+
+    For each (storm, day) pair, computes:
+        - day_offset: 0-based from storm start
+        - days_since_peak_snowfall: days since the peak snowfall day
+        - is_post_storm: 1 if after the last snow day, 0 otherwise
+        - cumulative_snowfall_cm: running total through this day
+        - daily_snowfall_cm: this day's snowfall
+        - cumulative_thaw_degree_hours: degree-hours above 0C since last snow
+
+    Args:
+        storms_df: DataFrame from detect_storms()
+        weather_df: Daily weather DataFrame with date, snowfall_cm, temp_max_c
+
+    Returns:
+        DataFrame with one row per (storm_id, day_offset)
+    """
+    weather_df = weather_df.copy()
+    weather_df["date"] = pd.to_datetime(weather_df["date"])
+    weather_lookup = weather_df.set_index("date")
+
+    rows = []
+    for _, storm in storms_df.iterrows():
+        sid = storm["storm_id"]
+        start = pd.Timestamp(storm["start_date"])
+        end = pd.Timestamp(storm["end_date"])  # last snow day
+        window_end = pd.Timestamp(storm["window_end"])
+
+        # Generate all days from start to window_end
+        all_days = pd.date_range(start, window_end, freq="D")
+
+        cumulative_snow = 0.0
+        peak_snow_day_offset = 0
+        peak_snow_amount = 0.0
+        last_snow_day_offset = 0
+        cumulative_thaw = 0.0
+        in_post_storm = False
+
+        for i, day in enumerate(all_days):
+            daily_snow = 0.0
+            daily_temp_max = 0.0
+            if day in weather_lookup.index:
+                w = weather_lookup.loc[day]
+                # Handle duplicate dates (take first row)
+                if isinstance(w, pd.DataFrame):
+                    w = w.iloc[0]
+                daily_snow = float(w.get("snowfall_cm", 0) or 0)
+                daily_temp_max = float(w.get("temp_max_c", 0) or 0)
+
+            cumulative_snow += daily_snow
+
+            # Track peak snowfall day
+            if daily_snow > peak_snow_amount:
+                peak_snow_amount = daily_snow
+                peak_snow_day_offset = i
+
+            # Track last snow day
+            if daily_snow >= SNOWFALL_THRESHOLD_CM:
+                last_snow_day_offset = i
+                in_post_storm = False
+                cumulative_thaw = 0.0  # reset thaw counter on snow days
+            else:
+                if i > last_snow_day_offset:
+                    in_post_storm = True
+                # Accumulate thaw: degree-hours above 0C (approx 12 hrs of temp_max)
+                if daily_temp_max > 0:
+                    cumulative_thaw += daily_temp_max * 12.0
+
+            rows.append({
+                "storm_id": sid,
+                "day_offset": i,
+                "date": day.strftime("%Y-%m-%d"),
+                "daily_snowfall_cm": round(daily_snow, 2),
+                "cumulative_snowfall_cm": round(cumulative_snow, 2),
+                "days_since_peak_snowfall": i - peak_snow_day_offset,
+                "is_post_storm": int(in_post_storm),
+                "cumulative_thaw_degree_hours": round(cumulative_thaw, 1),
+            })
+
+    storm_days_df = pd.DataFrame(rows)
+    print(f"  Expanded {len(storms_df)} storms into {len(storm_days_df)} storm-day rows")
+    return storm_days_df
+
+
 # ── Step 2: Per-segment-per-storm labeling ────────────────────────────────────
 
 def label_311(segments_df, seg_tree, seg_coords, storms_df, snow_311_df):
-    """Count 311 snow complaints within storm window and 200m of each segment."""
+    """Count 311 snow complaints per (segment, storm, day_offset)."""
     if snow_311_df.empty:
         print("  311: No data, skipping")
         return {}
@@ -213,9 +299,8 @@ def label_311(segments_df, seg_tree, seg_coords, storms_df, snow_311_df):
     )
     tree_311 = KDTree(coords_311)
 
-    # For each storm, find 311 complaints in window and count per segment
+    # For each storm, find 311 complaints per day and count per segment
     results = {}
-    n_storms = len(storms_df)
     for _, storm in storms_df.iterrows():
         sid = storm["storm_id"]
         start = pd.Timestamp(storm["start_date"])
@@ -228,6 +313,10 @@ def label_311(segments_df, seg_tree, seg_coords, storms_df, snow_311_df):
         if storm_311.empty:
             continue
 
+        # Assign day_offset to each complaint
+        storm_311 = storm_311.copy()
+        storm_311["_day_offset"] = (storm_311["_date"].dt.normalize() - start).dt.days
+
         # Spatial: for each 311 point, find ALL segments within radius
         pts_311 = to_meter_coords(
             storm_311[lat_col].values,
@@ -235,23 +324,26 @@ def label_311(segments_df, seg_tree, seg_coords, storms_df, snow_311_df):
         )
         neighbor_lists = seg_tree.query_ball_point(pts_311, r=SPATIAL_311_M)
 
-        # Count per segment (each complaint counted for every segment in radius)
-        counts = {}
-        for neighbors in neighbor_lists:
+        # Count per (segment, day_offset)
+        day_offsets = storm_311["_day_offset"].values
+        for i, neighbors in enumerate(neighbor_lists):
+            d = int(day_offsets[i])
             for idx in neighbors:
                 oid = segments_df.iloc[idx]["objectid"]
-                counts[oid] = counts.get(oid, 0) + 1
-
-        for oid, count in counts.items():
-            results[(oid, sid)] = count
+                key = (oid, sid, d)
+                results[key] = results.get(key, 0) + 1
 
     total = sum(results.values())
-    print(f"  311: {total} associations across {len(results)} segment-storms")
+    print(f"  311: {total} associations across {len(results)} segment-storm-days")
     return results
 
 
 def label_crashes(segments_df, seg_tree, seg_coords, storms_df, crashes_df):
-    """Allocate monthly crash counts to storms weighted by snowfall."""
+    """Allocate monthly crash counts to storms weighted by snowfall.
+
+    Distributes evenly across all days of the storm window since crash data
+    only has year/month granularity.
+    """
     if crashes_df.empty:
         print("  Crashes: No data, skipping")
         return {}
@@ -307,6 +399,7 @@ def label_crashes(segments_df, seg_tree, seg_coords, storms_df, crashes_df):
     storms_df["_end"] = pd.to_datetime(storms_df["window_end"])
 
     # For each (year, month), find storms and allocate proportionally by snowfall
+    # Distribute across all days of the storm window
     results = {}
     for (year, month), grp in crash_groups.groupby(["_year", "_month"]):
         # Find storms overlapping this month
@@ -331,19 +424,28 @@ def label_crashes(segments_df, seg_tree, seg_coords, storms_df, crashes_df):
         for _, storm in overlapping.iterrows():
             weight = storm["total_snowfall_cm"] / total_snow
             sid = storm["storm_id"]
+            # Number of days in the storm window
+            n_days = (storm["_end"] - storm["_start"]).days + 1
+            per_day_weight = weight / max(n_days, 1)
+
             for _, row in grp.iterrows():
                 oid = row["_oid"]
-                score = row["count"] * weight
-                key = (oid, sid)
-                results[key] = results.get(key, 0) + score
+                score_per_day = row["count"] * per_day_weight
+                for d in range(n_days):
+                    key = (oid, sid, d)
+                    results[key] = results.get(key, 0) + score_per_day
 
     total = sum(results.values())
-    print(f"  Crashes: {total:.1f} weighted associations across {len(results)} segment-storms")
+    print(f"  Crashes: {total:.1f} weighted associations across {len(results)} segment-storm-days")
     return results
 
 
 def label_plow_gaps(segments_df, seg_tree, seg_coords, storms_df, plow_df):
-    """Flag segments with zero plow points during storms that have plow data."""
+    """Flag segments with zero plow points during storms that have plow data.
+
+    Plow data is binary per-storm, so replicate the flag across all days
+    of the storm window.
+    """
     if plow_df.empty:
         print("  Plow: No data, skipping")
         return {}, set()
@@ -396,6 +498,7 @@ def label_plow_gaps(segments_df, seg_tree, seg_coords, storms_df, plow_df):
         sid = storm["storm_id"]
         start = storm["start_date"]
         end = storm["window_end"]
+        n_days = (pd.Timestamp(end) - pd.Timestamp(start)).days + 1
 
         # Check if any plow points fall in storm window
         # Plow event_date can be a range — check if any part overlaps
@@ -414,9 +517,11 @@ def label_plow_gaps(segments_df, seg_tree, seg_coords, storms_df, plow_df):
         # Segments that DID get plowed
         plowed_oids = set(storm_plow["_oid"].values)
 
-        # Gap = segments with zero plow points
+        # Gap = segments with zero plow points, replicated across all days
         for oid in all_oids:
-            results[(oid, sid)] = 0 if oid in plowed_oids else 1
+            gap_val = 0 if oid in plowed_oids else 1
+            for d in range(n_days):
+                results[(oid, sid, d)] = gap_val
 
     print(f"  Plow: {len(storms_with_plow)} storms with plow data, "
           f"{sum(v == 1 for v in results.values())} gap flags")
@@ -424,7 +529,7 @@ def label_plow_gaps(segments_df, seg_tree, seg_coords, storms_df, plow_df):
 
 
 def label_domi_closures(segments_df, seg_tree, seg_coords, storms_df, domi_df):
-    """Flag segments with DOMI full closures during storm windows."""
+    """Flag segments with DOMI full closures per (segment, storm, day_offset)."""
     if domi_df.empty:
         print("  DOMI: No data, skipping")
         return {}
@@ -481,7 +586,7 @@ def label_domi_closures(segments_df, seg_tree, seg_coords, storms_df, domi_df):
         oids = [segments_df.iloc[idx]["objectid"] for idx in neighbors]
         domi_seg_oids.append(oids)
 
-    # Temporal: for each storm, find overlapping closures
+    # Temporal: for each storm, find overlapping closures and assign to days
     results = {}
     for _, storm in storms_df.iterrows():
         sid = storm["storm_id"]
@@ -494,12 +599,19 @@ def label_domi_closures(segments_df, seg_tree, seg_coords, storms_df, domi_df):
         if not storm_indices:
             continue
 
-        # Flag ALL segments within radius of any matching DOMI closure
+        # Flag segments per day within radius of any matching DOMI closure
         for i in storm_indices:
-            for oid in domi_seg_oids[i]:
-                results[(oid, sid)] = 1
+            closure_from = domi_df.at[i, "_from"]
+            closure_to = domi_df.at[i, "_to"]
+            # Determine which days of the storm window this closure overlaps
+            overlap_start = max(start, closure_from)
+            overlap_end = min(end, closure_to)
+            for day in pd.date_range(overlap_start, overlap_end, freq="D"):
+                d = (day - start).days
+                for oid in domi_seg_oids[i]:
+                    results[(oid, sid, d)] = 1
 
-    print(f"  DOMI: {len(results)} segment-storm closure flags")
+    print(f"  DOMI: {len(results)} segment-storm-day closure flags")
     return results
 
 
@@ -507,51 +619,31 @@ def label_domi_closures(segments_df, seg_tree, seg_coords, storms_df, domi_df):
 
 def compute_risk_scores(storms_df, segments_df, labels_311, labels_crash,
                         labels_plow, storms_with_plow, labels_domi):
-    """Compute composite risk score per segment per storm.
+    """Compute composite risk score per segment per storm per day.
 
-    Uses log-scaled min-max normalization within each storm (zeros stay at 0),
-    then weighted sum.  Also outputs binary label variants.
+    Uses log-scaled min-max normalization within each (storm, day) pair
+    (zeros stay at 0), then weighted sum. Also outputs binary label variants.
+
+    Labels are now keyed by (objectid, storm_id, day_offset).
     """
     all_oids = segments_df["objectid"].values
     n_segments = len(all_oids)
-    oid_to_idx = {oid: i for i, oid in enumerate(all_oids)}
 
     rows = []
     n_storms = len(storms_df)
 
     for storm_idx, (_, storm) in enumerate(storms_df.iterrows()):
         sid = storm["storm_id"]
+        start = pd.Timestamp(storm["start_date"])
+        window_end = pd.Timestamp(storm["window_end"])
+        n_days = (window_end - start).days + 1
 
         if (storm_idx + 1) % 20 == 0 or storm_idx == 0:
-            print(f"  Computing risk scores: storm {storm_idx + 1}/{n_storms}...")
+            print(f"  Computing risk scores: storm {storm_idx + 1}/{n_storms} ({n_days} days)...")
 
-        # Gather raw values for this storm
-        raw_311 = np.zeros(n_segments)
-        raw_crash = np.zeros(n_segments)
-        raw_plow = np.full(n_segments, np.nan)  # NaN if no plow data
-        raw_domi = np.zeros(n_segments)
+        has_plow = sid in storms_with_plow
 
-        has_any_data = False
-
-        for i, oid in enumerate(all_oids):
-            key = (oid, sid)
-            if key in labels_311:
-                raw_311[i] = labels_311[key]
-                has_any_data = True
-            if key in labels_crash:
-                raw_crash[i] = labels_crash[key]
-                has_any_data = True
-            if key in labels_plow:
-                raw_plow[i] = labels_plow[key]
-                has_any_data = True
-            if key in labels_domi:
-                raw_domi[i] = labels_domi[key]
-                has_any_data = True
-
-        if not has_any_data:
-            continue
-
-        # Log-scaled min-max normalization (within this storm).
+        # Log-scaled min-max normalization (within this storm-day).
         # Zeros stay at 0; only segments with actual incidents get > 0.
         def log_minmax_norm(arr):
             """Log1p min-max normalization to [0, 1]. Zeros → 0, NaN preserved."""
@@ -569,56 +661,94 @@ def compute_risk_scores(storms_df, segments_df, labels_311, labels_crash,
                 result[valid] = 0.0
             return result
 
-        pctile_311 = log_minmax_norm(raw_311)
-        pctile_crash = log_minmax_norm(raw_crash)
-        pctile_domi = log_minmax_norm(raw_domi)
-        pctile_plow = log_minmax_norm(raw_plow)
+        storm_day_rows = []
 
-        has_plow = sid in storms_with_plow
+        for d in range(n_days):
+            # Gather raw values for this (storm, day)
+            raw_311 = np.zeros(n_segments)
+            raw_crash = np.zeros(n_segments)
+            raw_plow = np.full(n_segments, np.nan)
+            raw_domi = np.zeros(n_segments)
 
-        storm_rows = []
-        for i, oid in enumerate(all_oids):
-            if has_plow:
-                score = (W_311 * pctile_311[i] +
-                         W_CRASH * pctile_crash[i] +
-                         W_PLOW * pctile_plow[i] +
-                         W_DOMI * pctile_domi[i])
-            else:
-                # Renormalize weights without plow
-                w_total = W_311 + W_CRASH + W_DOMI
-                score = ((W_311 / w_total) * pctile_311[i] +
-                         (W_CRASH / w_total) * pctile_crash[i] +
-                         (W_DOMI / w_total) * pctile_domi[i])
+            has_any_data = False
 
-            score = max(0.0, min(1.0, score))
+            for i, oid in enumerate(all_oids):
+                key = (oid, sid, d)
+                if key in labels_311:
+                    raw_311[i] = labels_311[key]
+                    has_any_data = True
+                if key in labels_crash:
+                    raw_crash[i] = labels_crash[key]
+                    has_any_data = True
+                if key in labels_plow:
+                    raw_plow[i] = labels_plow[key]
+                    has_any_data = True
+                if key in labels_domi:
+                    raw_domi[i] = labels_domi[key]
+                    has_any_data = True
 
-            # Binary: any proxy source had a signal for this segment
-            any_incident = int(
-                raw_311[i] > 0 or raw_crash[i] > 0
-                or raw_domi[i] > 0
-                or (has_plow and not np.isnan(raw_plow[i]) and raw_plow[i] > 0)
-            )
+            if not has_any_data:
+                # Still emit rows for this day (all zeros) so training data has full coverage
+                for i, oid in enumerate(all_oids):
+                    storm_day_rows.append({
+                        "objectid": oid,
+                        "storm_id": sid,
+                        "day_offset": d,
+                        "storm_311_count": 0,
+                        "storm_crash_score": 0,
+                        "storm_plow_gap": raw_plow[i] if has_plow else np.nan,
+                        "storm_domi_closure": 0,
+                        "risk_score": 0.0,
+                        "label_any_incident": 0,
+                    })
+                continue
 
-            storm_rows.append({
-                "objectid": oid,
-                "storm_id": sid,
-                "storm_311_count": raw_311[i],
-                "storm_crash_score": round(raw_crash[i], 4),
-                "storm_plow_gap": raw_plow[i] if has_plow else np.nan,
-                "storm_domi_closure": raw_domi[i],
-                "risk_score": round(score, 6),
-                "label_any_incident": any_incident,
-            })
+            pctile_311 = log_minmax_norm(raw_311)
+            pctile_crash = log_minmax_norm(raw_crash)
+            pctile_domi = log_minmax_norm(raw_domi)
+            pctile_plow = log_minmax_norm(raw_plow)
 
-        # Compute top-percentile labels within this storm
-        scores = np.array([r["risk_score"] for r in storm_rows])
+            for i, oid in enumerate(all_oids):
+                if has_plow:
+                    score = (W_311 * pctile_311[i] +
+                             W_CRASH * pctile_crash[i] +
+                             W_PLOW * pctile_plow[i] +
+                             W_DOMI * pctile_domi[i])
+                else:
+                    w_total = W_311 + W_CRASH + W_DOMI
+                    score = ((W_311 / w_total) * pctile_311[i] +
+                             (W_CRASH / w_total) * pctile_crash[i] +
+                             (W_DOMI / w_total) * pctile_domi[i])
+
+                score = max(0.0, min(1.0, score))
+
+                any_incident = int(
+                    raw_311[i] > 0 or raw_crash[i] > 0
+                    or raw_domi[i] > 0
+                    or (has_plow and not np.isnan(raw_plow[i]) and raw_plow[i] > 0)
+                )
+
+                storm_day_rows.append({
+                    "objectid": oid,
+                    "storm_id": sid,
+                    "day_offset": d,
+                    "storm_311_count": raw_311[i],
+                    "storm_crash_score": round(raw_crash[i], 4),
+                    "storm_plow_gap": raw_plow[i] if has_plow else np.nan,
+                    "storm_domi_closure": raw_domi[i],
+                    "risk_score": round(score, 6),
+                    "label_any_incident": any_incident,
+                })
+
+        # Compute top-percentile labels within this storm (across all days)
+        scores = np.array([r["risk_score"] for r in storm_day_rows])
         p99 = np.percentile(scores, 99) if len(scores) > 0 else 0
         p95 = np.percentile(scores, 95) if len(scores) > 0 else 0
-        for r in storm_rows:
+        for r in storm_day_rows:
             r["label_top_1pct"] = int(r["risk_score"] >= p99 and r["risk_score"] > 0)
             r["label_top_5pct"] = int(r["risk_score"] >= p95 and r["risk_score"] > 0)
 
-        rows.extend(storm_rows)
+        rows.extend(storm_day_rows)
 
     labels_df = pd.DataFrame(rows)
     return labels_df
@@ -676,6 +806,12 @@ def main():
 
     storms_df.to_csv(STORM_EVENTS_CSV, index=False)
     print(f"  Saved {len(storms_df)} storms to {STORM_EVENTS_CSV}")
+
+    # Expand storms into per-day rows with temporal features
+    print(f"\n  Expanding storms into per-day rows...")
+    storm_days_df = expand_storm_days(storms_df, weather)
+    storm_days_df.to_csv(STORM_DAYS_CSV, index=False)
+    print(f"  Saved {len(storm_days_df)} storm-day rows to {STORM_DAYS_CSV}")
 
     # ── Step 2: Build segment KDTree ──────────────────────────────────────────
     print(f"\n{'='*60}")

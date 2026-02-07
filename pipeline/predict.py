@@ -137,8 +137,16 @@ def encode_static_features(df):
     return _encode(df)
 
 
-def add_weather_and_interactions(pred_df, weather):
-    """Broadcast weather features and compute interaction terms."""
+def add_weather_and_interactions(pred_df, weather, temporal=None):
+    """Broadcast weather features and compute interaction terms.
+
+    Args:
+        pred_df: DataFrame with encoded static features
+        weather: dict of weather scenario values
+        temporal: optional dict with temporal features (day_offset, days_since_peak_snowfall,
+                  is_post_storm, cumulative_snowfall_cm, cumulative_thaw_degree_hours,
+                  daily_snowfall_cm). Only used when model expects temporal features.
+    """
     # Weather features (same for every segment)
     pred_df["total_snowfall_cm"] = np.float32(weather["total_snowfall_cm"])
     pred_df["max_daily_snowfall_cm"] = np.float32(weather["max_daily_snowfall_cm"])
@@ -165,6 +173,30 @@ def add_weather_and_interactions(pred_df, weather):
         (-temp) * pred_df.get("is_bridge", 0))
     rw = pd.to_numeric(pred_df.get("roadwidth", 0), errors="coerce").fillna(0)
     pred_df["wind_x_roadwidth"] = np.float32(wind / (rw + 1))
+
+    # Temporal features (Part B: for models trained with day-level granularity)
+    if temporal:
+        day_offset = temporal.get("day_offset", 0)
+        pred_df["day_offset"] = np.float32(day_offset)
+        pred_df["days_since_peak_snowfall"] = np.float32(
+            temporal.get("days_since_peak_snowfall", 0))
+        pred_df["is_post_storm"] = np.float32(
+            temporal.get("is_post_storm", 0))
+        pred_df["cumulative_snowfall_cm"] = np.float32(
+            temporal.get("cumulative_snowfall_cm", snow))
+        pred_df["cumulative_thaw_degree_hours"] = np.float32(
+            temporal.get("cumulative_thaw_degree_hours", 0))
+        pred_df["daily_snowfall_cm"] = np.float32(
+            temporal.get("daily_snowfall_cm", snow))
+        # Temporal interaction features
+        pred_df["thaw_x_steep_slope"] = np.float32(
+            temporal.get("cumulative_thaw_degree_hours", 0)
+            * pred_df.get("near_steep_slope", 0))
+        pred_df["post_storm_x_elevation"] = np.float32(
+            temporal.get("is_post_storm", 0)
+            * pred_df.get("elevation_m", 0) / 1000.0)
+        pred_df["day_offset_x_snow"] = np.float32(
+            day_offset * snow)
 
     return pred_df
 
@@ -209,6 +241,62 @@ def calibrate_scores(raw_scores, weather_severity, calibration=None):
     return np.clip(calibrated, 0, 1)
 
 
+def compute_effective_weather(weather, recent_snowfall_cm, hours_since_snow,
+                              temp_avg_since_snow_c=None):
+    """Adjust weather dict to account for lingering snow from recent storms.
+
+    Uses temperature-dependent exponential decay + plowing linear decay to
+    estimate how much recent snow is still on the ground.
+
+    Args:
+        weather: dict with current weather scenario
+        recent_snowfall_cm: total snowfall in recent past
+        hours_since_snow: hours since last significant snowfall stopped
+        temp_avg_since_snow_c: avg temp since snow stopped (default: use min_temp_c)
+
+    Returns:
+        Updated weather dict with effective snowfall merged in.
+    """
+    if recent_snowfall_cm <= 0 or hours_since_snow is None:
+        return weather
+
+    # Use provided avg temp, or fall back to the current scenario's min temp
+    temp_c = temp_avg_since_snow_c if temp_avg_since_snow_c is not None else weather["min_temp_c"]
+
+    # Thermal decay rate: colder = slower melt
+    #   -10C: k=0.005/hr (half-life ~139h, snow preserved)
+    #     0C: k=0.02/hr  (half-life ~35h)
+    #    +5C: k=0.085/hr (half-life ~8h)
+    k = max(0.005, 0.02 + 0.013 * max(0, temp_c))
+    thermal_factor = np.exp(-k * hours_since_snow)
+
+    # Plow linear decay: city plows clear ~1%/hr, floor at 10%
+    plow_factor = max(0.1, 1.0 - 0.01 * hours_since_snow)
+
+    effective_recent = recent_snowfall_cm * thermal_factor * plow_factor
+
+    weather = weather.copy()
+    current_snow = weather["total_snowfall_cm"]
+    weather["total_snowfall_cm"] = round(current_snow + effective_recent, 2)
+    weather["max_daily_snowfall_cm"] = round(
+        max(weather["max_daily_snowfall_cm"], effective_recent), 2)
+    weather["duration_days"] = max(weather["duration_days"],
+                                   int(np.ceil(hours_since_snow / 24)) + 1)
+    weather["precip_total_mm"] = round(
+        weather["precip_total_mm"] + effective_recent, 2)
+
+    return weather, {
+        "recent_snowfall_cm": recent_snowfall_cm,
+        "hours_since_snow": hours_since_snow,
+        "temp_avg_since_snow_c": temp_c,
+        "thermal_decay_rate": round(k, 4),
+        "thermal_factor": round(thermal_factor, 4),
+        "plow_factor": round(plow_factor, 4),
+        "effective_recent_snow_cm": round(effective_recent, 2),
+        "effective_total_snowfall_cm": round(current_snow + effective_recent, 2),
+    }
+
+
 def main():
     import lightgbm as lgb
 
@@ -221,6 +309,22 @@ def main():
     parser.add_argument("--duration_days", type=int, default=None)
     parser.add_argument("--precip_mm", type=float, default=None)
     parser.add_argument("--use_forecast", action="store_true")
+    # Lingering snow arguments (Part A: effective weather at prediction time)
+    parser.add_argument("--recent_snowfall_cm", type=float, default=None,
+                        help="Total snowfall in recent past (e.g. 20cm fell yesterday)")
+    parser.add_argument("--hours_since_snow", type=float, default=None,
+                        help="Hours since last significant snowfall stopped")
+    parser.add_argument("--temp_avg_since_snow_c", type=float, default=None,
+                        help="Avg temperature since snow stopped (for melt estimation)")
+    # Temporal features (Part B: for models trained with temporal features)
+    parser.add_argument("--day_offset", type=int, default=None,
+                        help="Day offset within storm (0 = first day of snow)")
+    parser.add_argument("--days_since_peak", type=int, default=None,
+                        help="Days since peak snowfall day")
+    parser.add_argument("--is_post_storm", action="store_true",
+                        help="Whether this is after the last snow day")
+    parser.add_argument("--cumulative_thaw_degree_hours", type=float, default=None,
+                        help="Cumulative degree-hours above 0C since last snow")
     args = parser.parse_args()
 
     print("Road Closure Risk Prediction")
@@ -274,6 +378,22 @@ def main():
             "precip_total_mm": args.precip_mm or (args.snowfall_cm or 5.0),
         }
 
+    # ── Lingering snow adjustment ────────────────────────────────────────
+    lingering_info = None
+    if args.recent_snowfall_cm and args.recent_snowfall_cm > 0:
+        hours = args.hours_since_snow if args.hours_since_snow is not None else 12.0
+        weather, lingering_info = compute_effective_weather(
+            weather, args.recent_snowfall_cm, hours, args.temp_avg_since_snow_c
+        )
+        print(f"\n  Lingering snow adjustment:")
+        print(f"    Recent snowfall: {lingering_info['recent_snowfall_cm']} cm")
+        print(f"    Hours since snow: {lingering_info['hours_since_snow']}")
+        print(f"    Avg temp since snow: {lingering_info['temp_avg_since_snow_c']}C")
+        print(f"    Thermal factor: {lingering_info['thermal_factor']}")
+        print(f"    Plow factor: {lingering_info['plow_factor']}")
+        print(f"    Effective recent snow: {lingering_info['effective_recent_snow_cm']} cm")
+        print(f"    Effective total snow: {lingering_info['effective_total_snowfall_cm']} cm")
+
     print(f"\n  Weather scenario:")
     for k, v in weather.items():
         print(f"    {k}: {v}")
@@ -302,7 +422,29 @@ def main():
     print(f"{'='*60}")
 
     pred_df = static.copy()
-    pred_df = add_weather_and_interactions(pred_df, weather)
+
+    # Build temporal features dict if the model expects them
+    temporal = None
+    has_temporal_features = any(c in feature_cols for c in [
+        "day_offset", "days_since_peak_snowfall", "is_post_storm",
+        "cumulative_snowfall_cm", "cumulative_thaw_degree_hours", "daily_snowfall_cm",
+    ])
+    if has_temporal_features:
+        # Derive temporal values from CLI args or lingering snow info
+        day_offset = args.day_offset if args.day_offset is not None else 0
+        if args.recent_snowfall_cm and args.hours_since_snow:
+            day_offset = max(day_offset, int(np.ceil(args.hours_since_snow / 24)))
+        temporal = {
+            "day_offset": day_offset,
+            "days_since_peak_snowfall": args.days_since_peak if args.days_since_peak is not None else day_offset,
+            "is_post_storm": int(args.is_post_storm) if args.is_post_storm else (1 if args.recent_snowfall_cm and weather.get("total_snowfall_cm", 0) == 0 else 0),
+            "cumulative_snowfall_cm": weather["total_snowfall_cm"],
+            "cumulative_thaw_degree_hours": args.cumulative_thaw_degree_hours if args.cumulative_thaw_degree_hours is not None else 0,
+            "daily_snowfall_cm": weather.get("max_daily_snowfall_cm", weather["total_snowfall_cm"]),
+        }
+        print(f"\n  Temporal features: {temporal}")
+
+    pred_df = add_weather_and_interactions(pred_df, weather, temporal=temporal)
 
     # Ensure all feature columns present
     for col in feature_cols:
@@ -384,19 +526,25 @@ def main():
         features.append(feature)
 
     model_basename = os.path.basename(model_file)
+    meta = {
+        "generated_at": datetime.now().isoformat(),
+        "weather_scenario": weather,
+        "model": model_label,
+        "model_file": model_basename,
+        "segment_count": len(output_df),
+        "risk_distribution": {
+            cat: int((output_df["risk_category"] == cat).sum())
+            for _, _, cat in RISK_THRESHOLDS
+        },
+    }
+    if lingering_info:
+        meta["lingering_snow"] = lingering_info
+    if temporal:
+        meta["temporal_features"] = temporal
+
     geojson = {
         "type": "FeatureCollection",
-        "metadata": {
-            "generated_at": datetime.now().isoformat(),
-            "weather_scenario": weather,
-            "model": model_label,
-            "model_file": model_basename,
-            "segment_count": len(output_df),
-            "risk_distribution": {
-                cat: int((output_df["risk_category"] == cat).sum())
-                for _, _, cat in RISK_THRESHOLDS
-            },
-        },
+        "metadata": meta,
         "features": features,
     }
 
