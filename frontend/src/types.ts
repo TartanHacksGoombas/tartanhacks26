@@ -1,7 +1,6 @@
-export type SegmentKind = "road" | "sidewalk" | "all";
+export type SegmentKind = "road" | "all";
 
-/** 4-level display: open (green), low_risk (yellow), moderate_risk (orange), closed (red). 'caution' = legacy, shown as orange. */
-export type SegmentLabel = "open" | "low_risk" | "moderate_risk" | "closed" | "caution";
+export type SegmentLabel = "open" | "low_risk" | "moderate_risk" | "closed";
 
 export type ScoreReason = {
   code: string;
@@ -17,18 +16,36 @@ export type ConditionFeature = {
     coordinates: [number, number][];
   };
   properties: {
-    kind: "road" | "sidewalk";
+    kind: "road";
     name: string | null;
     score: number;
     label: SegmentLabel;
     reasons: ScoreReason[];
     updatedAt: string | null;
-    /** 0–1 from ML model; only present when status is from ML predictions. */
     closureProbability?: number;
+    riskCategory?: string;
   };
 };
 
 export type ConditionFeatureCollection = {
   type: "FeatureCollection";
   features: ConditionFeature[];
+};
+
+export type WeatherParams = {
+  snowfall_cm: number;
+  min_temp_c: number;
+  max_wind_kmh: number;
+  duration_days: number;
+};
+
+export type RouteRiskResult = {
+  routeRisk: {
+    average: number;
+    max: number;
+    category: string;
+  };
+  matchedSegments: number;
+  riskByDay: { day: number; avgRisk: number; category: string }[];
+  segments: ConditionFeatureCollection;
 };

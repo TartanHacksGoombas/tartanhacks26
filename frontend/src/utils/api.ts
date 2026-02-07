@@ -1,4 +1,4 @@
-import { ConditionFeatureCollection, SegmentKind } from "../types";
+import { ConditionFeatureCollection, SegmentKind, WeatherParams, RouteRiskResult } from "../types";
 import { decodePolyline } from "./polyline";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
@@ -12,15 +12,9 @@ export async function fetchConditions(
 ): Promise<ConditionFeatureCollection> {
   const params: Record<string, string> = {
     bbox: bbox.join(","),
-    kind
+    kind,
+    day_offset: String(dayOffset),
   };
-
-  // Pass the target date so the backend can serve day-specific predictions
-  if (dayOffset > 0) {
-    const target = new Date();
-    target.setDate(target.getDate() + dayOffset);
-    params.target_date = target.toISOString().split("T")[0]; // YYYY-MM-DD
-  }
 
   const query = new URLSearchParams(params);
   const response = await fetch(`${API_BASE}/v1/conditions?${query.toString()}`);
@@ -33,17 +27,128 @@ export async function fetchConditions(
   return (await response.json()) as ConditionFeatureCollection;
 }
 
+/* ── ML Predictions ── */
+
+export async function triggerPrediction(weather: WeatherParams): Promise<{
+  ok: boolean;
+  days: number;
+  segments: number;
+  duration_ms: number;
+}> {
+  const res = await fetch(`${API_BASE}/v1/predict`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ weather }),
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: "Prediction failed" }));
+    throw new Error(data.error ?? `Prediction failed: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function fetchPredictionStatus(): Promise<{
+  running: boolean;
+  lastWeather: WeatherParams | null;
+  lastRunAt: string | null;
+  segmentCount: number;
+  cachedDays: { day: number; predictions: number }[];
+}> {
+  const res = await fetch(`${API_BASE}/v1/predict/status`);
+  if (!res.ok) throw new Error("Failed to fetch prediction status");
+  return res.json();
+}
+
+/* ── Route Risk ── */
+
+export async function fetchRouteRisk(
+  coordinates: [number, number][],
+  dayOffset: number = 0
+): Promise<RouteRiskResult> {
+  const res = await fetch(`${API_BASE}/v1/route-risk`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ coordinates, day_offset: dayOffset }),
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: "Route risk failed" }));
+    throw new Error(data.error ?? `Route risk failed: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+/* ── Weather Analysis ── */
+
+/** Extract ML-compatible weather params from NWS forecast data. */
+export function extractWeatherParams(
+  periods: WeatherPeriod[],
+  hourly: HourlyPeriod[]
+): WeatherParams | null {
+  const snowKeywords = ["snow", "blizzard", "winter storm", "ice", "sleet", "freezing"];
+
+  // Check if any forecast period mentions snow
+  let hasSnow = false;
+  let snowDays = 0;
+  let minTempF = Infinity;
+  let maxWindKmh = 0;
+  let estimatedSnowfallCm = 0;
+
+  for (const p of periods.slice(0, 14)) {
+    const forecast = (p.shortForecast ?? "").toLowerCase();
+    if (snowKeywords.some((kw) => forecast.includes(kw))) {
+      hasSnow = true;
+      if (p.isDaytime) snowDays++;
+    }
+    if (p.temperature < minTempF) minTempF = p.temperature;
+  }
+
+  if (!hasSnow) return null;
+
+  // Estimate snowfall from hourly data
+  let snowHours = 0;
+  for (const h of hourly) {
+    const forecast = (h.shortForecast ?? "").toLowerCase();
+    const isSnowy = snowKeywords.some((kw) => forecast.includes(kw));
+    if (isSnowy && h.precipChance > 30) {
+      snowHours++;
+      // Rough estimate: heavy snow ~2.5cm/hr, light ~0.5cm/hr
+      const rate = h.precipChance > 70 ? 2.0 : h.precipChance > 50 ? 1.0 : 0.5;
+      estimatedSnowfallCm += rate;
+    }
+
+    // Track max wind
+    const windMatch = (h.windSpeed ?? "").match(/(\d+)/g);
+    if (windMatch) {
+      const windMph = Math.max(...windMatch.map(Number));
+      const windKmh = windMph * 1.60934;
+      if (windKmh > maxWindKmh) maxWindKmh = windKmh;
+    }
+  }
+
+  // Convert min temp F to C
+  const minTempC = (minTempF - 32) * 5 / 9;
+
+  return {
+    snowfall_cm: Math.max(estimatedSnowfallCm, 2), // at least 2cm if snow is mentioned
+    min_temp_c: Math.round(minTempC * 10) / 10,
+    max_wind_kmh: Math.round(maxWindKmh * 10) / 10,
+    duration_days: Math.max(snowDays, 1),
+  };
+}
+
 /* ── Autocomplete (Google Places via backend proxy) ── */
 
 export type GeocodeSuggestion = {
   displayName: string;
   placeId: string;
-  /** lat/lng are only filled after calling resolvePlace */
   lat: number;
   lng: number;
 };
 
-/** Returns up to 5 type-ahead suggestions using Places Autocomplete. */
 export async function geocode(query: string): Promise<GeocodeSuggestion[]> {
   const res = await fetch(
     `${API_BASE}/v1/maps/autocomplete?` + new URLSearchParams({ input: query })
@@ -61,7 +166,6 @@ export async function geocode(query: string): Promise<GeocodeSuggestion[]> {
   }));
 }
 
-/** Resolve a place_id to lat/lng coordinates. */
 export async function resolvePlace(placeId: string): Promise<{ lat: number; lng: number } | null> {
   const res = await fetch(
     `${API_BASE}/v1/maps/place-details?` + new URLSearchParams({ place_id: placeId })
@@ -75,7 +179,6 @@ export async function resolvePlace(placeId: string): Promise<{ lat: number; lng:
   return { lat: loc.lat, lng: loc.lng };
 }
 
-/** Reverse-geocode coordinates to a human-readable address. */
 export async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
   const res = await fetch(
     `${API_BASE}/v1/maps/reverse-geocode?` + new URLSearchParams({ latlng: `${lat},${lng}` })
@@ -85,7 +188,6 @@ export async function reverseGeocode(lat: number, lng: number): Promise<string |
   const data = await res.json();
   if (data.status !== "OK" || !data.results?.length) return null;
 
-  // Return the first result's formatted address (usually the most specific)
   return data.results[0].formatted_address ?? null;
 }
 
@@ -143,7 +245,6 @@ export type WeatherPeriod = {
   isDaytime: boolean;
 };
 
-/** Fetch the 7-day forecast for Pittsburgh from the National Weather Service. */
 export async function fetchWeather(): Promise<WeatherPeriod[]> {
   const res = await fetch("https://api.weather.gov/gridpoints/PBZ/77,65/forecast", {
     headers: { "User-Agent": "SnowRoutePittsburgh/1.0" }
@@ -173,7 +274,6 @@ export type HourlyPeriod = {
   precipChance: number;
 };
 
-/** Fetch hourly forecast for Pittsburgh (up to 156 hours). */
 export async function fetchWeatherHourly(): Promise<HourlyPeriod[]> {
   const res = await fetch("https://api.weather.gov/gridpoints/PBZ/77,65/forecast/hourly", {
     headers: { "User-Agent": "SnowRoutePittsburgh/1.0" }

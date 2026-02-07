@@ -1,5 +1,6 @@
-import { forwardRef, useCallback, useEffect, useState } from "react";
-import { fetchWeather, fetchWeatherHourly, WeatherPeriod, HourlyPeriod } from "../utils/api";
+import { forwardRef, useEffect, useRef, useState } from "react";
+import { fetchWeather, fetchWeatherHourly, extractWeatherParams, WeatherPeriod, HourlyPeriod } from "../utils/api";
+import { WeatherParams } from "../types";
 
 /* ── Helpers ── */
 
@@ -198,19 +199,32 @@ function PrecipGraph({ hours }: { hours: HourlyPeriod[] }) {
 /* ── Main Component ── */
 
 type WeatherBarProps = {
-  /** Day offset from the time slider (0 = today). When set, highlights that day. */
   activeDayOffset?: number;
+  onSnowDetected?: (params: WeatherParams) => void;
 };
 
-const WeatherBar = forwardRef<HTMLDivElement, WeatherBarProps>(function WeatherBar({ activeDayOffset }, ref) {
+const WeatherBar = forwardRef<HTMLDivElement, WeatherBarProps>(function WeatherBar({ activeDayOffset, onSnowDetected }, ref) {
   const [periods, setPeriods] = useState<WeatherPeriod[]>([]);
   const [hourly, setHourly] = useState<HourlyPeriod[]>([]);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const snowDetectedRef = useRef(false);
 
   useEffect(() => {
     fetchWeather().then(setPeriods).catch(() => {});
     fetchWeatherHourly().then(setHourly).catch(() => {});
   }, []);
+
+  // Auto-detect snow and notify parent
+  useEffect(() => {
+    if (snowDetectedRef.current || periods.length === 0 || hourly.length === 0) return;
+    if (!onSnowDetected) return;
+
+    const params = extractWeatherParams(periods, hourly);
+    if (params) {
+      snowDetectedRef.current = true;
+      onSnowDetected(params);
+    }
+  }, [periods, hourly, onSnowDetected]);
 
   const days = groupByDay(periods);
 

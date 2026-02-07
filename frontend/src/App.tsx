@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { LngLatBounds } from "maplibre-gl";
-import { fetchConditions } from "./utils/api";
-import { ConditionFeatureCollection, SegmentKind } from "./types";
+import { fetchConditions, triggerPrediction } from "./utils/api";
+import { ConditionFeatureCollection, SegmentKind, WeatherParams } from "./types";
 import { useMapPadding } from "./utils/useMapPadding";
-import PillButton from "./components/PillButton";
 import StatusCard from "./components/StatusCard";
 import NavigationPanel from "./components/NavigationPanel";
 import WeatherBar from "./components/WeatherBar";
@@ -17,8 +16,9 @@ type StatusCounts = {
   low_risk: number;
   moderate_risk: number;
   closed: number;
-  caution: number;
 };
+
+type PredictionStatus = "idle" | "loading" | "ready" | "error";
 
 const emptyGeoJson: ConditionFeatureCollection = {
   type: "FeatureCollection",
@@ -41,7 +41,6 @@ const MAP_STYLE: maplibregl.StyleSpecification = {
   },
   layers: [
     { id: "basemap", type: "raster", source: "basemap", minzoom: 0, maxzoom: 19 },
-    // Road conditions layer will be inserted here (between basemap and labels)
     { id: "labels", type: "raster", source: "labels", minzoom: 0, maxzoom: 19 }
   ]
 };
@@ -56,18 +55,36 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const { sidebarRef, weatherRef, padding } = useMapPadding();
-  const [kind, setKind] = useState<SegmentKind>("road");
+  const [kind] = useState<SegmentKind>("road");
   const [dayOffset, setDayOffset] = useState(0);
   const [mapReady, setMapReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
-  const [counts, setCounts] = useState<StatusCounts>({ open: 0, low_risk: 0, moderate_risk: 0, closed: 0, caution: 0 });
+  const [counts, setCounts] = useState<StatusCounts>({ open: 0, low_risk: 0, moderate_risk: 0, closed: 0 });
   const [error, setError] = useState<string | null>(null);
+  const [predictionStatus, setPredictionStatus] = useState<PredictionStatus>("idle");
+  const [weatherParams, setWeatherParams] = useState<WeatherParams | null>(null);
 
   const totalVisible = useMemo(
-    () => counts.open + counts.low_risk + counts.moderate_risk + counts.closed + counts.caution,
+    () => counts.open + counts.low_risk + counts.moderate_risk + counts.closed,
     [counts]
   );
+
+  // ── Trigger prediction when snow is detected ──
+  const handleSnowDetected = useCallback(async (params: WeatherParams) => {
+    setWeatherParams(params);
+    setPredictionStatus("loading");
+    try {
+      await triggerPrediction(params);
+      setPredictionStatus("ready");
+      // Force map reload to show new predictions
+      const map = mapRef.current;
+      if (map) map.fire("moveend");
+    } catch (e) {
+      console.error("Prediction failed:", e);
+      setPredictionStatus("error");
+    }
+  }, []);
 
   // ── Map init ──
   useEffect(() => {
@@ -95,16 +112,13 @@ export default function App() {
       setTimeout(() => map.resize(), 100);
       setTimeout(() => map.resize(), 500);
 
-      // Conditions source (shared by all condition layers)
       map.addSource(SOURCE_ID, { type: "geojson", data: emptyGeoJson });
 
-      // Shared paint for all condition layers
       const conditionColor: maplibregl.ExpressionSpecification = [
         "match", ["get", "label"],
         "open", "#16a34a",
         "low_risk", "#eab308",
         "moderate_risk", "#f97316",
-        "caution", "#f97316",
         "closed", "#dc2626",
         "#64748b"
       ];
@@ -136,7 +150,7 @@ export default function App() {
         }
       }, "labels");
 
-      // Residential / unclassified — visible from zoom 14, only segments >= 80 m
+      // Residential / minor — visible from zoom 14, segments >= 80m
       map.addLayer({
         id: LAYER_ID + "-minor",
         type: "line",
@@ -154,7 +168,7 @@ export default function App() {
         }
       }, "labels");
 
-      // Segment click popup — attach to all condition layers
+      // Segment click popup
       const conditionLayers = [LAYER_ID, LAYER_ID + "-tertiary", LAYER_ID + "-minor"];
       const onConditionClick = (event: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
         const feature = event.features?.[0];
@@ -162,23 +176,18 @@ export default function App() {
 
         const coordinates = feature.geometry.coordinates[0] as [number, number];
         const props = feature.properties ?? {};
-        const reasonSummary =
-          typeof props.reasonSummary === "string" && props.reasonSummary.trim().length > 0
-            ? props.reasonSummary : "No active penalties";
-        const reasonText = reasonSummary.split("|").slice(0, 3)
-          .map((r) => `<li>${r.trim()}</li>`).join("");
         const closurePct = typeof props.closureProbability === "number"
           ? `${(props.closureProbability * 100).toFixed(0)}%` : null;
+        const riskCat = props.riskCategory ?? props.label ?? "unknown";
 
         new maplibregl.Popup().setLngLat(coordinates).setHTML(`
           <div style="font-family: Avenir Next, Segoe UI, sans-serif; max-width: 260px;">
-            <div style="font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#475569">${props.kind ?? "segment"}</div>
+            <div style="font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#475569">Road Segment</div>
             <div style="font-size:16px;font-weight:700;margin-top:4px">${props.name ?? "Unnamed segment"}</div>
             <div style="margin-top:6px">
-              <strong>Score:</strong> ${props.score ?? "N/A"} (${props.label ?? "unknown"})
-              ${closurePct != null ? ` · <strong>Closure prob.:</strong> ${closurePct}` : ""}
+              <strong>Safety:</strong> ${props.score ?? "N/A"}/100 (${props.label ?? "unknown"})
+              ${closurePct != null ? `<br><strong>Risk:</strong> ${closurePct} (${riskCat})` : ""}
             </div>
-            <ul style="margin:8px 0 0 16px;padding:0">${reasonText || "<li>No active penalties</li>"}</ul>
           </div>
         `).addTo(map);
       };
@@ -206,7 +215,6 @@ export default function App() {
 
       try {
         const bbox = boundsToBbox(map.getBounds());
-        // Pass dayOffset so the backend can serve day-specific predictions
         const data = await fetchConditions(bbox, kind, dayOffset);
 
         const mapData = {
@@ -221,7 +229,7 @@ export default function App() {
               score: f.properties.score,
               label: f.properties.label,
               closureProbability: f.properties.closureProbability,
-              reasonSummary: f.properties.reasons.map((r) => r.detail).slice(0, 3).join(" | ")
+              riskCategory: f.properties.riskCategory ?? f.properties.label,
             }
           }))
         };
@@ -233,12 +241,11 @@ export default function App() {
             const l = f.properties.label;
             if (l === "open") acc.open += 1;
             else if (l === "low_risk") acc.low_risk += 1;
-            else if (l === "moderate_risk" || l === "caution") acc.moderate_risk += 1;
+            else if (l === "moderate_risk") acc.moderate_risk += 1;
             else if (l === "closed") acc.closed += 1;
-            if (l === "caution") acc.caution += 1;
             return acc;
           },
-          { open: 0, low_risk: 0, moderate_risk: 0, closed: 0, caution: 0 } as StatusCounts
+          { open: 0, low_risk: 0, moderate_risk: 0, closed: 0 } as StatusCounts
         );
         setCounts(nextCounts);
         setLastUpdated(new Date().toISOString());
@@ -265,9 +272,9 @@ export default function App() {
         style={{ width: "100%", height: "100%", minHeight: "100vh" }}
       />
 
-      <WeatherBar ref={weatherRef} activeDayOffset={dayOffset} />
+      <WeatherBar ref={weatherRef} activeDayOffset={dayOffset} onSnowDetected={handleSnowDetected} />
 
-      {/* Time slider — top center, spanning between sidebar and weather bar */}
+      {/* Time slider */}
       <div className="absolute top-4 z-20" style={{ left: "calc(320px + 2rem + 1rem)", right: "calc(500px + 2rem + 1rem)" }}>
         <TimeSlider value={dayOffset} onChange={setDayOffset} />
       </div>
@@ -277,29 +284,37 @@ export default function App() {
         <div className="mb-3">
           <h1 className="text-xl font-bold tracking-tight text-slate-900">Snow Route Pittsburgh</h1>
           <p className="text-sm text-slate-600">
-            Road conditions from weather, plows, and ML closure probability. Green → open, red → closed.
+            ML-powered road closure risk predictions. Green = safe, red = high risk.
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
             <span className="flex items-center gap-1"><span className="h-1.5 w-4 rounded bg-green-600" /> Open</span>
             <span className="flex items-center gap-1"><span className="h-1.5 w-4 rounded bg-yellow-500" /> Low risk</span>
-            <span className="flex items-center gap-1"><span className="h-1.5 w-4 rounded bg-orange-500" /> Moderate risk</span>
-            <span className="flex items-center gap-1"><span className="h-1.5 w-4 rounded bg-red-600" /> Closed</span>
+            <span className="flex items-center gap-1"><span className="h-1.5 w-4 rounded bg-orange-500" /> Moderate</span>
+            <span className="flex items-center gap-1"><span className="h-1.5 w-4 rounded bg-red-600" /> High risk</span>
           </div>
         </div>
 
-        {/* Kind filter */}
-        <div className="mb-4 flex flex-wrap gap-2">
-          <PillButton label="Roads" active={kind === "road"} onClick={() => setKind("road")} />
-          <PillButton label="Sidewalks" active={kind === "sidewalk"} onClick={() => setKind("sidewalk")} />
-          <PillButton label="All Segments" active={kind === "all"} onClick={() => setKind("all")} />
-        </div>
+        {/* Prediction status */}
+        {predictionStatus !== "idle" && (
+          <div className={`mb-3 rounded-lg px-3 py-2 text-xs ${
+            predictionStatus === "loading" ? "bg-blue-50 text-blue-700" :
+            predictionStatus === "ready" ? "bg-green-50 text-green-700" :
+            "bg-red-50 text-red-700"
+          }`}>
+            {predictionStatus === "loading" && "Running ML prediction model..."}
+            {predictionStatus === "ready" && weatherParams && (
+              <>Predictions ready: {weatherParams.snowfall_cm}cm snow, {weatherParams.min_temp_c}°C, {weatherParams.duration_days}d storm</>
+            )}
+            {predictionStatus === "error" && "Prediction failed — showing fallback data"}
+          </div>
+        )}
 
         {/* Status cards */}
         <div className="grid grid-cols-4 gap-2 text-sm">
           <StatusCard label="Open" count={counts.open} bgClass="bg-green-50" textClass="text-green-800" />
           <StatusCard label="Low risk" count={counts.low_risk} bgClass="bg-yellow-50" textClass="text-yellow-800" />
-          <StatusCard label="Moderate" count={counts.moderate_risk + counts.caution} bgClass="bg-orange-50" textClass="text-orange-800" />
-          <StatusCard label="Closed" count={counts.closed} bgClass="bg-red-50" textClass="text-red-800" />
+          <StatusCard label="Moderate" count={counts.moderate_risk} bgClass="bg-orange-50" textClass="text-orange-800" />
+          <StatusCard label="High risk" count={counts.closed} bgClass="bg-red-50" textClass="text-red-800" />
         </div>
 
         {/* Status bar */}
@@ -318,7 +333,7 @@ export default function App() {
         </div>
 
         {/* Navigation */}
-        <NavigationPanel mapRef={mapRef} mapPadding={padding} />
+        <NavigationPanel mapRef={mapRef} mapPadding={padding} dayOffset={dayOffset} />
       </aside>
     </div>
   );
