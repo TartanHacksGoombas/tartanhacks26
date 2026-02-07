@@ -1,6 +1,17 @@
 # Generated data files (large, re-fetchable)
 data/
 
+# But track model weights, metadata, and predictions
+!data/model_lgbm.txt
+!data/ranker_lgbm.txt
+!data/model_metadata.json
+!data/ranker_metadata.json
+!data/feature_importance.csv
+!data/ranker_feature_importance.csv
+!data/model_report.json
+!data/predictions_latest.csv
+!data/predictions_latest.json
+
 # Legacy CMU-scoped outputs
 legacy/roads_osm_cmu.csv
 legacy/roads_osm_cmu.json
