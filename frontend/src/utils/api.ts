@@ -81,6 +81,46 @@ export async function fetchRouteRisk(
   return res.json();
 }
 
+/* ── Safest Route (graph-based) ── */
+
+export type SafeRouteStep = {
+  instruction: string;
+  streetname: string;
+  distanceM: number;
+  riskScore: number;
+  riskCategory: string;
+};
+
+export type SafeRouteResult = {
+  geometry: { type: "LineString"; coordinates: [number, number][] };
+  distanceM: number;
+  durationSec: number;
+  steps: SafeRouteStep[];
+  routeRisk: { average: number; max: number; category: string };
+  matchedSegments: number;
+  segments: number[];
+};
+
+export async function fetchSafestRoute(
+  from: [number, number],
+  to: [number, number],
+  dayOffset: number = 0
+): Promise<SafeRouteResult> {
+  const params = new URLSearchParams({
+    from: `${from[0]},${from[1]}`,
+    to: `${to[0]},${to[1]}`,
+    day_offset: String(dayOffset),
+  });
+
+  const res = await fetch(`${API_BASE}/v1/route-safest?${params}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: "Route failed" }));
+    throw new Error(data.error ?? `Route failed: ${res.status}`);
+  }
+
+  return res.json();
+}
+
 /* ── Weather Analysis ── */
 
 /** Extract ML-compatible weather params from NWS forecast data. */

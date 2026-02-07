@@ -13,6 +13,7 @@ export type StoredSegment = {
   bbox: [number, number, number, number]; // [minLng, minLat, maxLng, maxLat]
   midLat: number;
   midLng: number;
+  oneway: boolean;
 };
 
 export type Prediction = {
@@ -107,6 +108,7 @@ export async function loadStore(dataDir: string) {
       bbox,
       midLat,
       midLng,
+      oneway: props.oneway === "yes" || props.oneway === true,
     };
 
     segments.set(objectid, seg);
@@ -205,6 +207,11 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
     Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
     Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** Iterate over all loaded segments. */
+export function getAllSegments(): IterableIterator<StoredSegment> {
+  return segments.values();
 }
 
 /** Find nearest segments to a coordinate within a radius. */

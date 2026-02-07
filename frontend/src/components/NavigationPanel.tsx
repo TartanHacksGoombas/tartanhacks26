@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import { fetchRoute, fetchRouteRisk, reverseGeocode, GeocodeSuggestion, RouteResult } from "../utils/api";
-import { RouteRiskResult } from "../types";
+import { fetchSafestRoute, reverseGeocode, GeocodeSuggestion, SafeRouteResult } from "../utils/api";
 import SearchInput from "./SearchInput";
 import Button from "./Button";
 import ToggleButton from "./ToggleButton";
@@ -63,8 +62,7 @@ export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0 }: N
   const [toText, setToText] = useState("");
   const [fromCoord, setFromCoord] = useState<[number, number] | null>(null);
   const [toCoord, setToCoord] = useState<[number, number] | null>(null);
-  const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
-  const [routeRisk, setRouteRisk] = useState<RouteRiskResult | null>(null);
+  const [safeRoute, setSafeRoute] = useState<SafeRouteResult | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const startMarkerRef = useRef<maplibregl.Marker | null>(null);
@@ -266,17 +264,13 @@ export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0 }: N
     if (!fromCoord || !toCoord) return;
     setRouteLoading(true);
     setRouteError(null);
-    setRouteResult(null);
-    setRouteRisk(null);
+    setSafeRoute(null);
     try {
-      const result = await fetchRoute(fromCoord, toCoord);
-      setRouteResult(result);
+      const result = await fetchSafestRoute(fromCoord, toCoord, dayOffset);
+      setSafeRoute(result);
       const coords = result.geometry.coordinates as [number, number][];
       setRouteData(coords);
       panToFit([fromCoord, toCoord, ...coords]);
-
-      // Fetch route risk in background
-      fetchRouteRisk(coords, dayOffset).then(setRouteRisk).catch(() => {});
     } catch (e) {
       setRouteError(e instanceof Error ? e.message : "Route failed");
     } finally {
@@ -284,9 +278,20 @@ export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0 }: N
     }
   }, [fromCoord, toCoord, dayOffset, setRouteData, panToFit]);
 
+  // Re-route when dayOffset changes while a route is displayed
+  useEffect(() => {
+    if (!safeRoute || !fromCoord || !toCoord) return;
+    let cancelled = false;
+    fetchSafestRoute(fromCoord, toCoord, dayOffset).then((result) => {
+      if (cancelled) return;
+      setSafeRoute(result);
+      setRouteData(result.geometry.coordinates as [number, number][]);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [dayOffset]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const clearRoute = useCallback(() => {
-    setRouteResult(null);
-    setRouteRisk(null);
+    setSafeRoute(null);
     setRouteError(null);
     setFromText("");
     setToText("");
@@ -312,14 +317,14 @@ export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0 }: N
         <div className="mt-3 space-y-2">
           <SearchInput
             value={fromText}
-            onChange={(t) => { setFromText(t); setFromCoord(null); if (routeResult) { setRouteResult(null); setRouteData([]); } }}
+            onChange={(t) => { setFromText(t); setFromCoord(null); if (safeRoute) { setSafeRoute(null); setRouteData([]); } }}
             onSelect={pickFrom}
             placeholder="From (address or place)"
             hasCoord={fromCoord !== null}
           />
           <SearchInput
             value={toText}
-            onChange={(t) => { setToText(t); setToCoord(null); if (routeResult) { setRouteResult(null); setRouteData([]); } }}
+            onChange={(t) => { setToText(t); setToCoord(null); if (safeRoute) { setSafeRoute(null); setRouteData([]); } }}
             onSelect={pickTo}
             placeholder="To (address or place)"
             hasCoord={toCoord !== null}
@@ -327,46 +332,47 @@ export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0 }: N
 
           <div className="flex gap-2">
             <Button
-              label={routeLoading ? "Routing..." : "Route"}
+              label={routeLoading ? "Routing..." : "Safest Route"}
               onClick={handleRoute}
               disabled={!fromCoord || !toCoord || routeLoading}
               fullWidth
             />
-            {routeResult && (
+            {safeRoute && (
               <Button label="Clear" onClick={clearRoute} variant="secondary" />
             )}
           </div>
 
           {routeError && <div className="text-xs text-red-600">{routeError}</div>}
 
-          {routeResult && (
+          {safeRoute && (
             <div className="rounded-lg bg-slate-50 p-2 text-xs text-slate-700">
               <div className="font-semibold">
-                {(routeResult.distanceM / 1609.34).toFixed(1)} mi · {Math.ceil(routeResult.durationSec / 60)} min
+                {(safeRoute.distanceM / 1609.34).toFixed(1)} mi · {Math.ceil(safeRoute.durationSec / 60)} min
               </div>
 
-              {routeRisk && (
-                <div className="mt-1.5 rounded-md border px-2 py-1.5" style={{
-                  borderColor: riskColor(routeRisk.routeRisk.category),
-                  backgroundColor: riskColor(routeRisk.routeRisk.category) + "10",
-                }}>
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold" style={{ color: riskColor(routeRisk.routeRisk.category) }}>
-                      Road Closure Risk: {routeRisk.routeRisk.category.replace("_", " ").toUpperCase()}
-                    </span>
-                    <span className="text-slate-500">
-                      {Math.round(routeRisk.routeRisk.average * 100)}% avg · {routeRisk.matchedSegments} segments
-                    </span>
-                  </div>
+              <div className="mt-1.5 rounded-md border px-2 py-1.5" style={{
+                borderColor: riskColor(safeRoute.routeRisk.category),
+                backgroundColor: riskColor(safeRoute.routeRisk.category) + "10",
+              }}>
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold" style={{ color: riskColor(safeRoute.routeRisk.category) }}>
+                    Route Risk: {safeRoute.routeRisk.category.replace("_", " ").toUpperCase()}
+                  </span>
+                  <span className="text-slate-500">
+                    {Math.round(safeRoute.routeRisk.average * 100)}% avg · {safeRoute.matchedSegments} segments
+                  </span>
                 </div>
-              )}
+              </div>
 
               <ol className="mt-1 max-h-32 list-decimal space-y-0.5 overflow-auto pl-4">
-                {routeResult.steps
+                {safeRoute.steps
                   .filter((s) => s.instruction)
-                  .slice(0, 12)
+                  .slice(0, 15)
                   .map((s, i) => (
-                    <li key={i}>{s.instruction} ({(s.distanceM / 1609.34).toFixed(2)} mi)</li>
+                    <li key={i} className="flex items-start gap-1">
+                      <span className="mt-0.5 inline-block h-2 w-2 flex-shrink-0 rounded-full" style={{ backgroundColor: riskColor(s.riskCategory) }} />
+                      <span>{s.instruction} ({(s.distanceM / 1609.34).toFixed(2)} mi)</span>
+                    </li>
                   ))}
               </ol>
             </div>
