@@ -59,8 +59,6 @@ export default function App() {
   const { sidebarRef, topBarRef, padding } = useMapPadding();
   const [kind] = useState<SegmentKind>("road");
   const [dayOffset, setDayOffset] = useState(0);
-  // previewDay updates live during drag (for weather bar); dayOffset commits on release (for data reload)
-  const [previewDay, setPreviewDay] = useState(0);
   const [mapReady, setMapReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [counts, setCounts] = useState<StatusCounts>({ open: 0, low_risk: 0, moderate_risk: 0, closed: 0 });
@@ -314,6 +312,19 @@ export default function App() {
     return () => { map.remove(); mapRef.current = null; };
   }, []);
 
+  // ── Keep map padding in sync with UI overlays ──
+  const initialPaddingRef = useRef(true);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    // Skip the first render — map starts un-padded and we don't want to animate on load
+    if (initialPaddingRef.current) {
+      initialPaddingRef.current = false;
+      return;
+    }
+    map.easeTo({ padding, duration: 300 });
+  }, [padding, mapReady]);
+
   // ── Load conditions on move ──
   useEffect(() => {
     const map = mapRef.current;
@@ -387,8 +398,7 @@ export default function App() {
         <UnifiedDayBar
           ref={topBarRef}
           value={dayOffset}
-          onChange={(d) => { setDayOffset(d); setPreviewDay(d); }}
-          onPreview={setPreviewDay}
+          onChange={setDayOffset}
           onSnowDetected={handleSnowDetected}
         />
       </div>

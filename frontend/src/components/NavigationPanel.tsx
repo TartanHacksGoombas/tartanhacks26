@@ -352,26 +352,12 @@ export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0 }: N
                 }}>
                   <div className="flex items-center justify-between">
                     <span className="font-semibold" style={{ color: riskColor(routeRisk.routeRisk.category) }}>
-                      Route Risk: {routeRisk.routeRisk.category.replace("_", " ").toUpperCase()}
+                      Road Closure Risk: {routeRisk.routeRisk.category.replace("_", " ").toUpperCase()}
                     </span>
                     <span className="text-slate-500">
                       {Math.round(routeRisk.routeRisk.average * 100)}% avg · {routeRisk.matchedSegments} segments
                     </span>
                   </div>
-                  {routeRisk.riskByDay.length > 1 && (
-                    <div className="mt-1 flex gap-1">
-                      {routeRisk.riskByDay.map((d) => (
-                        <span
-                          key={d.day}
-                          className="rounded px-1 py-0.5 text-[10px] font-medium text-white"
-                          style={{ backgroundColor: riskColor(d.category) }}
-                          title={`Day +${d.day}: ${d.category} (${Math.round(d.avgRisk * 100)}%)`}
-                        >
-                          +{d.day}d
-                        </span>
-                      ))}
-                    </div>
-                  )}
                 </div>
               )}
 

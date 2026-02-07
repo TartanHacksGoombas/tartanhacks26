@@ -163,24 +163,17 @@ function PrecipGraph({ hours }: { hours: HourlyPeriod[] }) {
 type UnifiedDayBarProps = {
   value: number;
   onChange: (dayOffset: number) => void;
-  onPreview?: (dayOffset: number) => void;
   onSnowDetected?: (params: WeatherParams) => void;
 };
 
 const UnifiedDayBar = forwardRef<HTMLDivElement, UnifiedDayBarProps>(function UnifiedDayBar(
-  { value, onChange, onPreview, onSnowDetected },
+  { value, onChange, onSnowDetected },
   ref
 ) {
   const [periods, setPeriods] = useState<WeatherPeriod[]>([]);
   const [hourly, setHourly] = useState<HourlyPeriod[]>([]);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const snowDetectedRef = useRef(false);
-
-  // Slider drag state
-  const [dragging, setDragging] = useState(false);
-  const [localVal, setLocalVal] = useState(value);
-
-  useEffect(() => { if (!dragging) setLocalVal(value); }, [value, dragging]);
 
   // Fetch weather data
   useEffect(() => {
@@ -200,7 +193,6 @@ const UnifiedDayBar = forwardRef<HTMLDivElement, UnifiedDayBarProps>(function Un
   }, [periods, hourly, onSnowDetected]);
 
   const days = groupByDay(periods);
-  const maxDays = days.length || 7;
 
   const handleDayClick = useCallback((idx: number) => {
     if (idx === value) {
@@ -212,18 +204,6 @@ const UnifiedDayBar = forwardRef<HTMLDivElement, UnifiedDayBarProps>(function Un
     }
   }, [value, onChange]);
 
-  const handleSliderInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = Number(e.target.value);
-    setLocalVal(v);
-    onPreview?.(v);
-  }, [onPreview]);
-
-  const handleSliderCommit = useCallback(() => {
-    setDragging(false);
-    onChange(localVal);
-  }, [localVal, onChange]);
-
-  const display = localVal;
   const expanded = expandedIdx !== null ? days[expandedIdx] : null;
   const expandedHours = expanded ? getHoursForDay(hourly, expanded.day.startTime) : [];
 
@@ -238,7 +218,7 @@ const UnifiedDayBar = forwardRef<HTMLDivElement, UnifiedDayBarProps>(function Un
   return (
     <div ref={ref} className="rounded-2xl border border-slate-200 bg-white/90 shadow-lg backdrop-blur">
       {/* Day columns */}
-      <div className="flex justify-between px-2 pt-2 pb-1">
+      <div className="flex justify-between px-2 pt-2 pb-2">
         {days.map((g, i) => {
           const isSelected = i === value;
           const dayHours = getHoursForDay(hourly, g.day.startTime);
@@ -274,32 +254,6 @@ const UnifiedDayBar = forwardRef<HTMLDivElement, UnifiedDayBarProps>(function Un
             </button>
           );
         })}
-      </div>
-
-      {/* Range slider */}
-      <div className="px-4 pb-2">
-        <input
-          type="range"
-          min={0}
-          max={maxDays - 1}
-          step={1}
-          value={display}
-          onChange={handleSliderInput}
-          onMouseDown={() => setDragging(true)}
-          onMouseUp={handleSliderCommit}
-          onTouchStart={() => setDragging(true)}
-          onTouchEnd={handleSliderCommit}
-          className="
-            w-full cursor-pointer appearance-none rounded-full bg-slate-200 h-2
-            accent-blue-600
-            [&::-webkit-slider-thumb]:appearance-none
-            [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:w-5
-            [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-blue-600
-            [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white
-            [&::-webkit-slider-thumb]:shadow-lg
-            [&::-webkit-slider-thumb]:transition-transform [&::-webkit-slider-thumb]:hover:scale-110
-          "
-        />
       </div>
 
       {/* Expandable hourly detail */}
