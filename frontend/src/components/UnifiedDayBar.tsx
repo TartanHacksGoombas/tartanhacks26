@@ -1,22 +1,22 @@
-import { forwardRef, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useRef, useState } from "react";
 import { fetchWeather, fetchWeatherHourly, extractWeatherParams, WeatherPeriod, HourlyPeriod } from "../utils/api";
 import { WeatherParams } from "../types";
 
-/* ── Helpers ── */
+/* ── Helpers (migrated from WeatherBar) ── */
 
 function weatherIcon(forecast: string, isDaytime: boolean): string {
   const f = forecast.toLowerCase();
-  if (f.includes("snow") || f.includes("blizzard")) return "❄️";
-  if (f.includes("sleet") || f.includes("freezing")) return "🌨️";
-  if (f.includes("thunder") || f.includes("storm")) return "⛈️";
-  if (f.includes("rain") || f.includes("shower")) return "🌧️";
-  if (f.includes("drizzle")) return "🌦️";
-  if (f.includes("fog") || f.includes("mist") || f.includes("haze")) return "🌫️";
-  if (f.includes("cloud") || f.includes("overcast")) return "☁️";
-  if (f.includes("partly")) return isDaytime ? "⛅" : "🌙";
-  if (f.includes("wind")) return "🌬️";
-  if (f.includes("sunny") || f.includes("clear")) return isDaytime ? "☀️" : "🌙";
-  return "🌤️";
+  if (f.includes("snow") || f.includes("blizzard")) return "\u2744\uFE0F";
+  if (f.includes("sleet") || f.includes("freezing")) return "\uD83C\uDF28\uFE0F";
+  if (f.includes("thunder") || f.includes("storm")) return "\u26C8\uFE0F";
+  if (f.includes("rain") || f.includes("shower")) return "\uD83C\uDF27\uFE0F";
+  if (f.includes("drizzle")) return "\uD83C\uDF26\uFE0F";
+  if (f.includes("fog") || f.includes("mist") || f.includes("haze")) return "\uD83C\uDF2B\uFE0F";
+  if (f.includes("cloud") || f.includes("overcast")) return "\u2601\uFE0F";
+  if (f.includes("partly")) return isDaytime ? "\u26C5" : "\uD83C\uDF19";
+  if (f.includes("wind")) return "\uD83C\uDF2C\uFE0F";
+  if (f.includes("sunny") || f.includes("clear")) return isDaytime ? "\u2600\uFE0F" : "\uD83C\uDF19";
+  return "\uD83C\uDF24\uFE0F";
 }
 
 function isHourDaytime(hour: number): boolean {
@@ -49,30 +49,24 @@ function formatHour(iso: string): string {
   return h === 0 ? "12a" : h < 12 ? `${h}a` : h === 12 ? "12p" : `${h - 12}p`;
 }
 
-/** Is the forecast wintry (snow/ice/sleet/freezing)? */
 function isWintry(forecast: string): boolean {
   const f = forecast.toLowerCase();
   return f.includes("snow") || f.includes("ice") || f.includes("sleet") || f.includes("freezing") || f.includes("blizzard");
 }
 
-/** Color for precipitation — factors in type: rain stays yellow, snow/ice goes red. */
 function precipColor(pct: number, forecast = ""): string {
-  if (pct < 10) return "#16a34a";   // green — negligible
-  if (pct < 20) return "#84cc16";   // lime
-
+  if (pct < 10) return "#16a34a";
+  if (pct < 20) return "#84cc16";
   if (isWintry(forecast)) {
-    // Snow / ice / freezing — escalate to red fast
-    if (pct >= 80) return "#7f1d1d"; // dark red
-    if (pct >= 60) return "#b91c1c"; // red
-    if (pct >= 40) return "#dc2626"; // bright red
-    if (pct >= 20) return "#ea580c"; // orange
+    if (pct >= 80) return "#7f1d1d";
+    if (pct >= 60) return "#b91c1c";
+    if (pct >= 40) return "#dc2626";
+    if (pct >= 20) return "#ea580c";
   }
-
-  // Rain only — caps at yellow/orange
-  if (pct >= 70) return "#ea580c";   // orange
-  if (pct >= 50) return "#eab308";   // yellow
-  if (pct >= 30) return "#facc15";   // light yellow
-  return "#eab308";                   // yellow
+  if (pct >= 70) return "#ea580c";
+  if (pct >= 50) return "#eab308";
+  if (pct >= 30) return "#facc15";
+  return "#eab308";
 }
 
 /* ── Precipitation Graph ── */
@@ -94,7 +88,6 @@ function PrecipGraph({ hours }: { hours: HourlyPeriod[] }) {
   if (n === 0) return <div className="px-4 py-2 text-xs text-slate-400">No hourly data</div>;
 
   const barW = Math.max(2, plotW / n - 1);
-
   const toX = (i: number) => PAD_L + (i / n) * plotW + barW / 2;
   const toY = (pct: number) => PAD_T + plotH - (pct / 100) * plotH;
 
@@ -108,21 +101,12 @@ function PrecipGraph({ hours }: { hours: HourlyPeriod[] }) {
         style={{ maxHeight: 120 }}
         onMouseLeave={() => setHoverIdx(null)}
       >
-        {/* Y-axis gridlines */}
         {[0, 25, 50, 75, 100].map((pct) => (
           <g key={pct}>
-            <line
-              x1={PAD_L} x2={GRAPH_W - PAD_R}
-              y1={toY(pct)} y2={toY(pct)}
-              stroke="#e2e8f0" strokeWidth={0.5}
-            />
-            <text x={PAD_L - 4} y={toY(pct) + 3} textAnchor="end" className="fill-slate-400" fontSize={8}>
-              {pct}%
-            </text>
+            <line x1={PAD_L} x2={GRAPH_W - PAD_R} y1={toY(pct)} y2={toY(pct)} stroke="#e2e8f0" strokeWidth={0.5} />
+            <text x={PAD_L - 4} y={toY(pct) + 3} textAnchor="end" className="fill-slate-400" fontSize={8}>{pct}%</text>
           </g>
         ))}
-
-        {/* Bars */}
         {hours.map((h, i) => {
           const pct = h.precipChance;
           const x = toX(i) - barW / 2;
@@ -130,10 +114,8 @@ function PrecipGraph({ hours }: { hours: HourlyPeriod[] }) {
           return (
             <rect
               key={h.startTime}
-              x={x}
-              y={PAD_T + plotH - barH}
-              width={barW}
-              height={Math.max(barH, 1)}
+              x={x} y={PAD_T + plotH - barH}
+              width={barW} height={Math.max(barH, 1)}
               rx={1}
               fill={precipColor(pct, h.shortForecast)}
               opacity={hoverIdx === i ? 1 : 0.8}
@@ -142,43 +124,23 @@ function PrecipGraph({ hours }: { hours: HourlyPeriod[] }) {
             />
           );
         })}
-
-        {/* Hover indicator line */}
         {hoverIdx !== null && (
-          <line
-            x1={toX(hoverIdx)} x2={toX(hoverIdx)}
-            y1={PAD_T} y2={PAD_T + plotH}
-            stroke="#475569" strokeWidth={0.8} strokeDasharray="2,2"
-          />
+          <line x1={toX(hoverIdx)} x2={toX(hoverIdx)} y1={PAD_T} y2={PAD_T + plotH} stroke="#475569" strokeWidth={0.8} strokeDasharray="2,2" />
         )}
-
-        {/* X-axis labels (every 3 hours) */}
         {hours.map((h, i) => {
           const hr = new Date(h.startTime).getHours();
           if (hr % 3 !== 0) return null;
           return (
-            <text
-              key={h.startTime}
-              x={toX(i)}
-              y={GRAPH_H - 4}
-              textAnchor="middle"
-              className="fill-slate-400"
-              fontSize={8}
-            >
+            <text key={h.startTime} x={toX(i)} y={GRAPH_H - 4} textAnchor="middle" className="fill-slate-400" fontSize={8}>
               {formatHour(h.startTime)}
             </text>
           );
         })}
       </svg>
-
-      {/* Hover tooltip */}
       {hovered && hoverIdx !== null && (
         <div
           className="pointer-events-none absolute z-20 -translate-x-1/2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs shadow-md"
-          style={{
-            left: `${(toX(hoverIdx) / GRAPH_W) * 100}%`,
-            top: -4
-          }}
+          style={{ left: `${(toX(hoverIdx) / GRAPH_W) * 100}%`, top: -4 }}
         >
           <div className="font-semibold text-slate-700">
             {formatHour(hovered.startTime)} — {hovered.precipChance}% precip
@@ -198,27 +160,31 @@ function PrecipGraph({ hours }: { hours: HourlyPeriod[] }) {
 
 /* ── Main Component ── */
 
-type WeatherBarProps = {
-  activeDayOffset?: number;
+type UnifiedDayBarProps = {
+  value: number;
+  onChange: (dayOffset: number) => void;
   onSnowDetected?: (params: WeatherParams) => void;
 };
 
-const WeatherBar = forwardRef<HTMLDivElement, WeatherBarProps>(function WeatherBar({ activeDayOffset, onSnowDetected }, ref) {
+const UnifiedDayBar = forwardRef<HTMLDivElement, UnifiedDayBarProps>(function UnifiedDayBar(
+  { value, onChange, onSnowDetected },
+  ref
+) {
   const [periods, setPeriods] = useState<WeatherPeriod[]>([]);
   const [hourly, setHourly] = useState<HourlyPeriod[]>([]);
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const snowDetectedRef = useRef(false);
 
+  // Fetch weather data
   useEffect(() => {
     fetchWeather().then(setPeriods).catch(() => {});
     fetchWeatherHourly().then(setHourly).catch(() => {});
   }, []);
 
-  // Auto-detect snow and notify parent
+  // Auto-detect snow
   useEffect(() => {
     if (snowDetectedRef.current || periods.length === 0 || hourly.length === 0) return;
     if (!onSnowDetected) return;
-
     const params = extractWeatherParams(periods, hourly);
     if (params) {
       snowDetectedRef.current = true;
@@ -228,26 +194,33 @@ const WeatherBar = forwardRef<HTMLDivElement, WeatherBarProps>(function WeatherB
 
   const days = groupByDay(periods);
 
-  // Sync expanded panel with time slider's day offset
-  useEffect(() => {
-    if (activeDayOffset !== undefined && days.length > 0) {
-      if (activeDayOffset < days.length) {
-        setSelectedIdx(activeDayOffset);
-      }
+  const handleDayClick = useCallback((idx: number) => {
+    if (idx === value) {
+      // Toggle expand on already-selected day
+      setExpandedIdx((prev) => (prev === idx ? null : idx));
+    } else {
+      onChange(idx);
+      setExpandedIdx(null);
     }
-  }, [activeDayOffset, days.length]);
+  }, [value, onChange]);
 
-  if (days.length === 0) return null;
+  const expanded = expandedIdx !== null ? days[expandedIdx] : null;
+  const expandedHours = expanded ? getHoursForDay(hourly, expanded.day.startTime) : [];
 
-  const selected = selectedIdx !== null ? days[selectedIdx] : null;
-  const selectedHours = selected ? getHoursForDay(hourly, selected.day.startTime) : [];
+  if (days.length === 0) {
+    return (
+      <div ref={ref} className="rounded-2xl border border-slate-200 bg-white/90 px-5 py-3 shadow-lg backdrop-blur">
+        <div className="text-sm text-slate-400">Loading weather...</div>
+      </div>
+    );
+  }
 
   return (
-    <div ref={ref} className="absolute right-4 top-4 z-10 w-[500px] rounded-2xl border border-slate-200 bg-white/90 shadow-lg backdrop-blur">
-      {/* Day row */}
-      <div className="flex justify-between px-2 pt-2 pb-1">
+    <div ref={ref} className="rounded-2xl border border-slate-200 bg-white/90 shadow-lg backdrop-blur">
+      {/* Day columns */}
+      <div className="flex justify-between px-2 pt-2 pb-2">
         {days.map((g, i) => {
-          const isActive = selectedIdx === i;
+          const isSelected = i === value;
           const dayHours = getHoursForDay(hourly, g.day.startTime);
           const maxPrecip = dayHours.length > 0 ? Math.max(...dayHours.map((h) => h.precipChance)) : 0;
           const worstForecast = dayHours.length > 0
@@ -256,13 +229,15 @@ const WeatherBar = forwardRef<HTMLDivElement, WeatherBarProps>(function WeatherB
           return (
             <button
               key={g.day.name}
-              onClick={() => setSelectedIdx(isActive ? null : i)}
-              className={`flex flex-col items-center gap-0.5 rounded-xl px-2.5 py-1.5 transition-colors ${
-                isActive ? "bg-blue-100" : "hover:bg-slate-100"
+              onClick={() => handleDayClick(i)}
+              className={`flex flex-col items-center gap-0.5 rounded-xl px-2.5 py-1.5 transition-all ${
+                isSelected
+                  ? "bg-blue-100 ring-2 ring-blue-400"
+                  : "hover:bg-slate-100"
               }`}
             >
               <span className="text-[11px] font-medium text-slate-500">
-                {g.day.name.slice(0, 3)}
+                {i === 0 ? "Today" : g.day.name.slice(0, 3)}
               </span>
               <span className="text-[9px] text-slate-400">
                 {new Date(g.day.startTime).toLocaleDateString(undefined, { month: "numeric", day: "numeric" })}
@@ -273,42 +248,40 @@ const WeatherBar = forwardRef<HTMLDivElement, WeatherBarProps>(function WeatherB
               <span className="text-xs font-semibold text-slate-800">
                 {g.day.temperature}°
               </span>
-              <span className="text-[9px] font-medium" style={{ color: precipColor(maxPrecip, worstForecast) }}>
-                {maxPrecip}%
+              <span className="text-[9px] font-medium text-slate-400">
+                💧{maxPrecip}%
               </span>
             </button>
           );
         })}
       </div>
 
-      {/* Expanded detail panel */}
-      {selected && (
+      {/* Expandable hourly detail */}
+      {expanded && (
         <div className="border-t border-slate-200 px-3 py-3 text-sm">
           <div className="mb-1 flex items-baseline justify-between">
             <div>
-              <span className="font-semibold text-slate-800">{selected.day.name}</span>
+              <span className="font-semibold text-slate-800">{expanded.day.name}</span>
               <span className="ml-2 text-xs text-slate-400">
-                {new Date(selected.day.startTime).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+                {new Date(expanded.day.startTime).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
               </span>
             </div>
             <div className="flex gap-3 text-xs text-slate-500">
               <span>
-                {weatherIcon(selected.day.shortForecast, true)} {selected.day.temperature}°F {selected.day.shortForecast}
+                {weatherIcon(expanded.day.shortForecast, true)} {expanded.day.temperature}°F {expanded.day.shortForecast}
               </span>
-              {selected.night && (
+              {expanded.night && (
                 <span>
-                  {weatherIcon(selected.night.shortForecast, false)} {selected.night.temperature}°F
+                  {weatherIcon(expanded.night.shortForecast, false)} {expanded.night.temperature}°F
                 </span>
               )}
             </div>
           </div>
-
-          {/* Precipitation graph */}
           <div className="mt-1">
             <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-slate-400">
               Precipitation Chance
             </div>
-            <PrecipGraph hours={selectedHours} />
+            <PrecipGraph hours={expandedHours} />
           </div>
         </div>
       )}
@@ -316,4 +289,4 @@ const WeatherBar = forwardRef<HTMLDivElement, WeatherBarProps>(function WeatherB
   );
 });
 
-export default WeatherBar;
+export default UnifiedDayBar;

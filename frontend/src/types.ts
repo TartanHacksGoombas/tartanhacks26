@@ -1,6 +1,6 @@
 export type SegmentKind = "road" | "all";
 
-export type SegmentLabel = "open" | "low_risk" | "moderate_risk" | "closed";
+export type SegmentLabel = "open" | "low_risk" | "moderate_risk" | "high_risk" | "closed";
 
 export type ScoreReason = {
   code: string;

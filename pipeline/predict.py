@@ -49,11 +49,11 @@ OUTPUT_JSON = os.path.join(DATA_DIR, "predictions_latest.json")
 
 # Risk categories (applied to calibrated [0,1] scores)
 RISK_THRESHOLDS = [
-    (0.0, 0.15, "very_low"),
-    (0.15, 0.35, "low"),
-    (0.35, 0.55, "moderate"),
-    (0.55, 0.75, "high"),
-    (0.75, 1.01, "very_high"),
+    (0.0, 0.05, "very_low"),
+    (0.05, 0.15, "low"),
+    (0.15, 0.35, "moderate"),
+    (0.35, 0.55, "high"),
+    (0.55, 1.01, "very_high"),
 ]
 
 
