@@ -47,12 +47,12 @@ pipeline/ (Python: 18 collection scripts + 7 ML scripts)
 
 React 18 SPA with MapLibre GL for interactive map of Pittsburgh road segments colored by closure risk (green/yellow/orange/red). Key components:
 - `App.tsx` — Map initialization, conditions loading on viewport move, prediction triggering
-- `WeatherBar.tsx` — Weather input (snowfall, temp, wind) that triggers ML predictions
-- `TimeSlider.tsx` — Day offset selector (0–6 days) for multi-day storm forecasts
-- `NavigationPanel.tsx` — Sidebar with route search and segment info
+- `UnifiedDayBar.tsx` — 7-day forecast bar with expandable hourly precipitation graphs and auto-snow detection (replaced separate WeatherBar/TimeSlider)
+- `NavigationPanel.tsx` — Sidebar with route search (Google Places autocomplete) and segment info
+- `LocationButton.tsx` — User geolocation tracking
 - `utils/api.ts` — Fetch wrapper for backend API
 
-Map renders road segments at zoom-dependent detail: major roads always visible, tertiary at zoom 13+, residential at zoom 14+. Uses CartoDB Voyager tiles as basemap.
+Map renders road segments at zoom-dependent detail: major roads always visible, tertiary at zoom 13+, residential at zoom 14+. Uses CartoDB Voyager tiles as basemap. During navigation, risk visibility filters to only the active route segments (wider lines, full opacity).
 
 ### Backend (`backend/`)
 
@@ -60,10 +60,15 @@ Express API with in-memory spatial data store (no database in current architectu
 
 Key endpoints:
 - `GET /v1/conditions?bbox=...&kind=road&day_offset=0` — Road segments with risk in viewport
-- `GET /v1/route-safest?from=lng,lat&to=lng,lat` — Safest route corridor
+- `GET /v1/route-safest?from=lng,lat&to=lng,lat` — Risk-aware A* routing (builds road network graph on startup)
+- `POST /v1/route-risk` — Route risk analysis (samples coordinates every ~50m, matches to road segments)
 - `POST /v1/predict` — Triggers Python `predict_batch.py` via `execFile`, stores results in memory
+- `GET /v1/maps/geocode`, `/autocomplete`, `/place-details`, `/reverse-geocode`, `/directions` — Google Maps API proxies (requires `GOOGLE_MAPS_KEY` env var)
+- `GET /healthz` — Health check
 
-Config (`backend/src/config.ts`): resolves `DATA_DIR` and `PIPELINE_DIR` relative to project root. Zod-validated env vars: `PORT` (4000), `CORS_ORIGIN` (http://localhost:5173).
+**Routing service** (`backend/src/services/graph.ts`): On startup, builds a bidirectional road network graph from GeoJSON. Auto-stitches disconnected endpoints within 15m. A* pathfinding uses risk-aware edge costs: `lengthM * (1 + RISK_WEIGHT * risk)` where `RISK_WEIGHT = 10`. Generates turn-by-turn instructions via bearing-based turn detection.
+
+Config (`backend/src/config.ts`): resolves `DATA_DIR` and `PIPELINE_DIR` relative to project root. Zod-validated env vars: `PORT` (4000), `CORS_ORIGIN` (http://localhost:5173), `GOOGLE_MAPS_KEY` (optional).
 
 **Integration flow:** Frontend WeatherBar → `POST /v1/predict` → backend spawns `python3 pipeline/predict_batch.py` → parses JSON stdout → stores in `predictionCache` (Map<dayOffset, Map<objectid, Prediction>>) → frontend reloads conditions from viewport.
 
@@ -101,6 +106,8 @@ All scripts are standalone with `main()` functions, resolve paths via `DATA_DIR`
 - **Prediction calibration:** Sigmoid ranking + weather-severity power transform (light snow compresses scores, blizzard spreads them)
 - **Lingering snow:** `compute_effective_weather()` in predict.py uses thermal decay `k(T) = max(0.005, 0.02 + 0.013 * max(0, T))` + plow linear decay
 - **Backend spatial index:** Grid-based (0.002°) in-memory store, no database — loads GeoJSON at startup
+- **Road network graph:** Built at startup from GeoJSON with auto-stitching of disconnected endpoints and connected component analysis
+- **Risk categories:** `very_low` → `open`, `low` → `low_risk`, `moderate` → `moderate_risk`, `high`/`very_high` → `closed` (see `backend/src/utils/risk.ts`)
 - **Pipeline caching:** Collection scripts skip re-fetch if output CSV already exists in `data/`
 
 ## Data Notes

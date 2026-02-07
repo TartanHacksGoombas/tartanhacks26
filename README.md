@@ -1,113 +1,90 @@
 # WinterWise
 
-Pittsburgh winter road closure prediction and route planning with:
+Pittsburgh winter road closure prediction and risk-aware route planning. Predicts which roads are likely to close during snowstorms and routes around them using ML-powered risk scores. Built for TartanHacks 2026.
 
-- `frontend/`: React + TypeScript + Tailwind + MapLibre
-- `backend/`: Node + Express + TypeScript
-- `backend/sql/001_init.sql`: Supabase/Postgres + PostGIS schema
+- `frontend/` — React + TypeScript + Tailwind + MapLibre GL
+- `backend/` — Node + Express + TypeScript (in-memory spatial store)
+- `pipeline/` — Python ML pipeline (data collection, LightGBM training, prediction)
 
-## 1) Database (Supabase)
+## Quick Start
 
-1. Open your Supabase SQL editor.
-2. Run `backend/sql/001_init.sql`.
-3. Run `backend/sql/002_seed_pittsburgh.sql` so the map has sample segments.
-4. Run `backend/sql/003_ml_predictions.sql` to add 4-level labels and `closure_probability` for ML (green/yellow/orange/red).
-5. Ensure your project has PostGIS enabled (the migration includes `CREATE EXTENSION postgis`).
-
-## 2) Backend setup
+### 1) ML Pipeline (Python)
 
 ```bash
-cd /Users/edwin/Documents/coding/tartanhacks26/backend
-cp .env.example .env
+pip install -r requirements.txt   # macOS: brew install libomp (for LightGBM)
+python pipeline/collect_all.py    # Full pipeline: data collection → training → model
+```
+
+This produces `data/centerlines_pgh.geojson` (road network) and `data/ranker_lgbm.txt` (ML model), which the backend needs at startup.
+
+### 2) Backend
+
+```bash
+cd backend
+cp .env.example .env              # Edit to add GOOGLE_MAPS_KEY if needed
 npm install
-npm run dev
+npm run dev                       # http://localhost:4000
 ```
 
-Required env vars:
+Environment variables:
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `4000` | Server port |
+| `CORS_ORIGIN` | `http://localhost:5173` | Frontend origin |
+| `GOOGLE_MAPS_KEY` | _(none)_ | Enables geocoding/directions proxy endpoints |
 
-- `DATABASE_URL`: Supabase Postgres connection string
-- `ADMIN_TOKEN`: token for protected ingest/recompute endpoints
-- `CORS_ORIGIN`: frontend origin (default `http://localhost:5173`)
+On startup the backend loads `data/centerlines_pgh.geojson` into a grid-based spatial index and builds a road network graph for A* routing.
 
-API base URL: `http://localhost:4000`
-
-### Backend endpoints
-
-- `GET /healthz`
-- `GET /v1/conditions?bbox=minLng,minLat,maxLng,maxLat&kind=road|sidewalk|all`
-- `GET /v1/segment/:id`
-- `GET /v1/closures/active?bbox=minLng,minLat,maxLng,maxLat`
-- `GET /v1/timeline?bbox=minLng,minLat,maxLng,maxLat&kind=road|sidewalk|all&at=ISO_TIMESTAMP`
-- `GET /v1/route-safest?from=lng,lat&to=lng,lat&kind=road|sidewalk`
-- `POST /v1/admin/ingest/:provider` (header `x-admin-token`)
-- `POST /v1/admin/ingest/ml-predictions` (header `x-admin-token`) — ML closure probability per segment; see **docs/ML_API.md**
-- `POST /v1/admin/recompute-scores` (header `x-admin-token`)
-
-## 3) Frontend setup
+### 3) Frontend
 
 ```bash
-cd /Users/edwin/Documents/coding/tartanhacks26/frontend
-cp .env.example .env
+cd frontend
+cp .env.example .env              # VITE_API_BASE_URL=http://localhost:4000
 npm install
-npm run dev
+npm run dev                       # http://localhost:5173
 ```
 
-Frontend runs at `http://localhost:5173` and loads map segments from backend.
+### Running predictions
 
-## 4) Ingest payload example
+From the UI: adjust snowfall/temperature/wind in the weather bar and predictions run automatically.
 
-`POST /v1/admin/ingest/penndot`
-
-```json
-{
-  "events": [
-    {
-      "source_event_id": "event-123",
-      "event_type": "closure",
-      "severity": 5,
-      "starts_at": "2026-02-07T16:00:00Z",
-      "ends_at": "2026-02-07T22:00:00Z",
-      "props": {
-        "name": "I-376 closure"
-      },
-      "geom": {
-        "type": "LineString",
-        "coordinates": [
-          [-79.99, 40.44],
-          [-79.98, 40.44]
-        ]
-      }
-    }
-  ]
-}
-```
-
-Then recompute:
-
+From the CLI:
 ```bash
-curl -X POST http://localhost:4000/v1/admin/recompute-scores \
-  -H "x-admin-token: change-me"
+# Active storm
+python pipeline/predict.py --snowfall_cm 15 --min_temp_c -8 --max_wind_kmh 40 --duration_days 2
+
+# Lingering snow (no new snow, roads still buried)
+python pipeline/predict.py --snowfall_cm 0 --recent_snowfall_cm 20 --hours_since_snow 18 --min_temp_c -5
 ```
 
-## 5) Sidewalk phase
+## API Endpoints
 
-Schema and API already support sidewalks using `segments.kind = 'sidewalk'`.
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/healthz` | Health check |
+| `GET` | `/v1/conditions?bbox=...&kind=road&day_offset=0` | Road segments with risk in viewport |
+| `GET` | `/v1/route-safest?from=lng,lat&to=lng,lat` | Risk-aware A* routing with turn-by-turn |
+| `POST` | `/v1/route-risk` | Risk analysis for a given route |
+| `POST` | `/v1/predict` | Trigger ML predictions (spawns Python) |
+| `GET` | `/v1/maps/geocode` | Google Maps geocoding proxy |
+| `GET` | `/v1/maps/autocomplete` | Google Places autocomplete proxy |
+| `GET` | `/v1/maps/place-details` | Place ID → coordinates |
+| `GET` | `/v1/maps/reverse-geocode` | Coordinates → address |
+| `GET` | `/v1/maps/directions` | Google directions proxy |
 
-Next step is to ingest sidewalk network data and sidewalk-impact events, then query with:
+## Architecture
 
-- `GET /v1/conditions?...&kind=sidewalk`
+```
+frontend/ (React + MapLibre + Tailwind + Vite)
+    ↕ REST API
+backend/ (Express + TypeScript, in-memory spatial index + road graph)
+    ↕ execFile("python3", predict_batch.py)
+pipeline/ (Python: 18 collection scripts + 7 ML scripts)
+    → data/ (CSVs, Parquet, GeoJSON, LightGBM models)
+```
 
-## Hackathon demo (Snowstorm + roads + plow → open/closed)
+**Prediction flow:** Frontend weather bar → `POST /v1/predict` → backend spawns `python3 pipeline/predict_batch.py` → parses JSON stdout → stores in `predictionCache` → frontend reloads conditions.
 
-1. Run DB migrations and seed (steps 1–2 above), then start backend and frontend.
-2. Ingest NWS weather alerts (Pittsburgh zone):  
-   `cd backend && ADMIN_TOKEN=your-token npm run ingest:weather`
-3. Recompute scores:  
-   `curl -X POST http://localhost:4000/v1/admin/recompute-scores -H "x-admin-token: your-token"`
-4. Open the app: roads colored green/amber/red by passability; legend in the sidebar.
+**Routing:** A* pathfinding on the road network graph with risk-aware edge costs (`length * (1 + 10 * risk)`). Disconnected road segments are auto-stitched within 15m.
 
-See **NEXT_STEPS.md** for full roadmap: real road network (OSM), 511 PA closures, plow data, and frontend polish.
-
-## Notes
-
-- `route-safest` currently returns a corridor-based safest segment set (`mode: "corridor_mvp"`). Replace with pgRouting for turn-by-turn routing in the next iteration.
+**ML model:** LightGBM LambdaRank trained on 11 winters of Pittsburgh data — 311 complaints, crash reports, plow activity, and DOMI closures as proxy labels for road closure risk.
