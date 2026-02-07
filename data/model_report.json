@@ -1,0 +1,46 @@
+{
+  "test_seasons": [
+    "2023-24",
+    "2024-25"
+  ],
+  "n_test_rows": 1105587,
+  "regression_model": {
+    "regression": {
+      "rmse": 0.084459,
+      "mae": 0.049437,
+      "r2": -0.056994
+    },
+    "ranking": {
+      "mean_ndcg_50": 0.157162,
+      "mean_ndcg_200": 0.18273,
+      "mean_ndcg_500": 0.195811,
+      "mean_recall_200": 0.01975,
+      "mean_recall_500": 0.0497,
+      "mean_spearman": 0.208837,
+      "n_storms": 20
+    },
+    "binary_any_incident": {
+      "pr_auc": 0.286937,
+      "n_positive": 235306,
+      "recall_at_200": 0.00045,
+      "recall_at_500": 0.001152
+    }
+  },
+  "ranker_model": {
+    "ranking": {
+      "mean_ndcg_50": 0.10894,
+      "mean_ndcg_200": 0.124225,
+      "mean_ndcg_500": 0.137873,
+      "mean_recall_200": 0.01025,
+      "mean_recall_500": 0.0266,
+      "mean_spearman": 0.039439,
+      "n_storms": 20
+    },
+    "binary_any_incident": {
+      "pr_auc": 0.224006,
+      "n_positive": 235306,
+      "recall_at_200": 0.000289,
+      "recall_at_500": 0.000676
+    }
+  }
+}

@@ -1,5 +1,5 @@
 # Generated data files (large, re-fetchable)
-data/
+data/*
 
 # But track model weights, metadata, and predictions
 !data/model_lgbm.txt
