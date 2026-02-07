@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import { fetchRoute, reverseGeocode, GeocodeSuggestion, RouteResult } from "../utils/api";
+import { fetchRoute, fetchRouteRisk, reverseGeocode, GeocodeSuggestion, RouteResult } from "../utils/api";
+import { RouteRiskResult } from "../types";
 import SearchInput from "./SearchInput";
 import Button from "./Button";
 import ToggleButton from "./ToggleButton";
@@ -14,6 +15,7 @@ type MapPadding = { top: number; right: number; bottom: number; left: number };
 type NavigationPanelProps = {
   mapRef: React.RefObject<maplibregl.Map | null>;
   mapPadding: MapPadding;
+  dayOffset?: number;
 };
 
 /** Ensure the route source + layers exist on the map. Safe to call repeatedly. */
@@ -44,13 +46,25 @@ function ensureRouteLayers(map: maplibregl.Map) {
   }
 }
 
-export default function NavigationPanel({ mapRef, mapPadding }: NavigationPanelProps) {
+function riskColor(category: string): string {
+  switch (category) {
+    case "very_low": return "#16a34a";
+    case "low": return "#eab308";
+    case "moderate": return "#f97316";
+    case "high": return "#dc2626";
+    case "very_high": return "#7f1d1d";
+    default: return "#64748b";
+  }
+}
+
+export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0 }: NavigationPanelProps) {
   const [open, setOpen] = useState(false);
   const [fromText, setFromText] = useState("");
   const [toText, setToText] = useState("");
   const [fromCoord, setFromCoord] = useState<[number, number] | null>(null);
   const [toCoord, setToCoord] = useState<[number, number] | null>(null);
   const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
+  const [routeRisk, setRouteRisk] = useState<RouteRiskResult | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const startMarkerRef = useRef<maplibregl.Marker | null>(null);
@@ -253,21 +267,26 @@ export default function NavigationPanel({ mapRef, mapPadding }: NavigationPanelP
     setRouteLoading(true);
     setRouteError(null);
     setRouteResult(null);
+    setRouteRisk(null);
     try {
       const result = await fetchRoute(fromCoord, toCoord);
       setRouteResult(result);
       const coords = result.geometry.coordinates as [number, number][];
       setRouteData(coords);
       panToFit([fromCoord, toCoord, ...coords]);
+
+      // Fetch route risk in background
+      fetchRouteRisk(coords, dayOffset).then(setRouteRisk).catch(() => {});
     } catch (e) {
       setRouteError(e instanceof Error ? e.message : "Route failed");
     } finally {
       setRouteLoading(false);
     }
-  }, [fromCoord, toCoord, setRouteData, panToFit]);
+  }, [fromCoord, toCoord, dayOffset, setRouteData, panToFit]);
 
   const clearRoute = useCallback(() => {
     setRouteResult(null);
+    setRouteRisk(null);
     setRouteError(null);
     setFromText("");
     setToText("");
@@ -325,6 +344,37 @@ export default function NavigationPanel({ mapRef, mapPadding }: NavigationPanelP
               <div className="font-semibold">
                 {(routeResult.distanceM / 1609.34).toFixed(1)} mi · {Math.ceil(routeResult.durationSec / 60)} min
               </div>
+
+              {routeRisk && (
+                <div className="mt-1.5 rounded-md border px-2 py-1.5" style={{
+                  borderColor: riskColor(routeRisk.routeRisk.category),
+                  backgroundColor: riskColor(routeRisk.routeRisk.category) + "10",
+                }}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold" style={{ color: riskColor(routeRisk.routeRisk.category) }}>
+                      Route Risk: {routeRisk.routeRisk.category.replace("_", " ").toUpperCase()}
+                    </span>
+                    <span className="text-slate-500">
+                      {Math.round(routeRisk.routeRisk.average * 100)}% avg · {routeRisk.matchedSegments} segments
+                    </span>
+                  </div>
+                  {routeRisk.riskByDay.length > 1 && (
+                    <div className="mt-1 flex gap-1">
+                      {routeRisk.riskByDay.map((d) => (
+                        <span
+                          key={d.day}
+                          className="rounded px-1 py-0.5 text-[10px] font-medium text-white"
+                          style={{ backgroundColor: riskColor(d.category) }}
+                          title={`Day +${d.day}: ${d.category} (${Math.round(d.avgRisk * 100)}%)`}
+                        >
+                          +{d.day}d
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <ol className="mt-1 max-h-32 list-decimal space-y-0.5 overflow-auto pl-4">
                 {routeResult.steps
                   .filter((s) => s.instruction)
