@@ -73,6 +73,25 @@ mapsProxyRouter.get("/place-details", async (req, res) => {
   }
 });
 
+/** Proxy: GET /v1/maps/reverse-geocode?latlng=lat,lng — reverse geocode coordinates to address */
+mapsProxyRouter.get("/reverse-geocode", async (req, res) => {
+  if (!GMAPS_KEY) return res.status(500).json({ error: "GOOGLE_MAPS_KEY not set on server" });
+
+  const latlng = String(req.query.latlng ?? "");
+  if (!latlng) return res.status(400).json({ error: "latlng required (lat,lng)" });
+
+  try {
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?` +
+      new URLSearchParams({ latlng, key: GMAPS_KEY });
+
+    const gRes = await fetch(url);
+    const data = await gRes.json();
+    return res.json(data);
+  } catch (e) {
+    return res.status(502).json({ error: "Reverse geocode proxy failed" });
+  }
+});
+
 /** Proxy: GET /v1/maps/directions?origin=lat,lng&destination=lat,lng */
 mapsProxyRouter.get("/directions", async (req, res) => {
   if (!GMAPS_KEY) return res.status(500).json({ error: "GOOGLE_MAPS_KEY not set on server" });

@@ -72,6 +72,7 @@ function buildConditionsQuery(kind: SegmentKindOrAll, bbox: [number, number, num
       s.id,
       s.kind,
       s.name,
+      s.highway,
       s.length_m AS "lengthM",
       s.slope_pct AS "slopePct",
       ST_AsGeoJSON(s.geom)::json AS geometry,
@@ -106,6 +107,7 @@ conditionsRouter.get("/conditions", async (req, res) => {
         properties: {
           kind: row.kind,
           name: row.name,
+          highway: row.highway,
           score: row.score,
           label: row.label,
           reasons: row.reasons,

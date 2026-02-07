@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { LngLatBounds } from "maplibre-gl";
-import { fetchConditions } from "./api";
+import { fetchConditions } from "./utils/api";
 import { ConditionFeatureCollection, SegmentKind } from "./types";
+import { useMapPadding } from "./utils/useMapPadding";
 import PillButton from "./components/PillButton";
 import StatusCard from "./components/StatusCard";
 import NavigationPanel from "./components/NavigationPanel";
+import WeatherBar from "./components/WeatherBar";
 
 const SOURCE_ID = "conditions-source";
 const LAYER_ID = "conditions-layer";
@@ -25,14 +27,21 @@ const emptyGeoJson: ConditionFeatureCollection = {
 const MAP_STYLE: maplibregl.StyleSpecification = {
   version: 8,
   sources: {
-    osm: {
+    basemap: {
       type: "raster",
-      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+      tiles: ["https://basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png"],
+      tileSize: 256
+    },
+    labels: {
+      type: "raster",
+      tiles: ["https://basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png"],
       tileSize: 256
     }
   },
   layers: [
-    { id: "osm", type: "raster", source: "osm", minzoom: 0, maxzoom: 19 }
+    { id: "basemap", type: "raster", source: "basemap", minzoom: 0, maxzoom: 19 },
+    // Road conditions layer will be inserted here (between basemap and labels)
+    { id: "labels", type: "raster", source: "labels", minzoom: 0, maxzoom: 19 }
   ]
 };
 
@@ -45,6 +54,7 @@ function boundsToBbox(bounds: LngLatBounds): [number, number, number, number] {
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const { sidebarRef, weatherRef, padding } = useMapPadding();
   const [kind, setKind] = useState<SegmentKind>("road");
   const [mapReady, setMapReady] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -71,7 +81,7 @@ export default function App() {
     });
 
     mapRef.current = map;
-    map.addControl(new maplibregl.NavigationControl(), "top-right");
+    map.addControl(new maplibregl.NavigationControl(), "bottom-right");
 
     map.on("error", (e) => {
       console.error("MapLibre error:", e);
@@ -83,29 +93,68 @@ export default function App() {
       setTimeout(() => map.resize(), 100);
       setTimeout(() => map.resize(), 500);
 
-      // Conditions layer
+      // Conditions source (shared by all condition layers)
       map.addSource(SOURCE_ID, { type: "geojson", data: emptyGeoJson });
+
+      // Shared paint for all condition layers
+      const conditionColor: maplibregl.ExpressionSpecification = [
+        "match", ["get", "label"],
+        "open", "#16a34a",
+        "low_risk", "#eab308",
+        "moderate_risk", "#f97316",
+        "caution", "#f97316",
+        "closed", "#dc2626",
+        "#64748b"
+      ];
+
+      // Major roads — always visible
       map.addLayer({
         id: LAYER_ID,
         type: "line",
         source: SOURCE_ID,
+        filter: ["in", ["get", "highway"], ["literal", ["motorway", "trunk", "primary", "secondary"]]],
         paint: {
-          "line-color": [
-            "match", ["get", "label"],
-            "open", "#16a34a",
-            "low_risk", "#eab308",
-            "moderate_risk", "#f97316",
-            "caution", "#f97316",
-            "closed", "#dc2626",
-            "#64748b"
-          ],
-          "line-width": 4,
-          "line-opacity": 0.9
+          "line-color": conditionColor,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 10, 2, 13, 4.5, 16, 7],
+          "line-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.7, 14, 0.9]
         }
-      });
+      }, "labels");
 
-      // Segment click popup
-      map.on("click", LAYER_ID, (event) => {
+      // Tertiary roads — visible from zoom 13
+      map.addLayer({
+        id: LAYER_ID + "-tertiary",
+        type: "line",
+        source: SOURCE_ID,
+        minzoom: 13,
+        filter: ["==", ["get", "highway"], "tertiary"],
+        paint: {
+          "line-color": conditionColor,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 13, 2, 16, 4],
+          "line-opacity": 0.85
+        }
+      }, "labels");
+
+      // Residential / unclassified — visible from zoom 14, only segments >= 80 m
+      map.addLayer({
+        id: LAYER_ID + "-minor",
+        type: "line",
+        source: SOURCE_ID,
+        minzoom: 14,
+        filter: [
+          "all",
+          ["!", ["in", ["get", "highway"], ["literal", ["motorway", "trunk", "primary", "secondary", "tertiary"]]]],
+          [">=", ["get", "lengthM"], 80]
+        ] as any,
+        paint: {
+          "line-color": conditionColor,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 16, 3],
+          "line-opacity": 0.8
+        }
+      }, "labels");
+
+      // Segment click popup — attach to all condition layers
+      const conditionLayers = [LAYER_ID, LAYER_ID + "-tertiary", LAYER_ID + "-minor"];
+      const onConditionClick = (event: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
         const feature = event.features?.[0];
         if (!feature || !feature.geometry || feature.geometry.type !== "LineString") return;
 
@@ -130,10 +179,12 @@ export default function App() {
             <ul style="margin:8px 0 0 16px;padding:0">${reasonText || "<li>No active penalties</li>"}</ul>
           </div>
         `).addTo(map);
-      });
-
-      map.on("mouseenter", LAYER_ID, () => { map.getCanvas().style.cursor = "pointer"; });
-      map.on("mouseleave", LAYER_ID, () => { map.getCanvas().style.cursor = ""; });
+      };
+      for (const layerId of conditionLayers) {
+        map.on("click", layerId, onConditionClick);
+        map.on("mouseenter", layerId, () => { map.getCanvas().style.cursor = "pointer"; });
+        map.on("mouseleave", layerId, () => { map.getCanvas().style.cursor = ""; });
+      }
 
       setMapReady(true);
     });
@@ -162,6 +213,8 @@ export default function App() {
             properties: {
               kind: f.properties.kind,
               name: f.properties.name ?? "Unnamed segment",
+              highway: (f.properties as any).highway ?? "unclassified",
+              lengthM: (f.properties as any).lengthM ?? 0,
               score: f.properties.score,
               label: f.properties.label,
               closureProbability: f.properties.closureProbability,
@@ -209,7 +262,9 @@ export default function App() {
         style={{ width: "100%", height: "100%", minHeight: "100vh" }}
       />
 
-      <aside className="absolute left-4 top-4 z-10 w-[320px] max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-xl backdrop-blur">
+      <WeatherBar ref={weatherRef} />
+
+      <aside ref={sidebarRef} className="absolute left-4 top-4 z-10 w-[320px] max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-xl backdrop-blur">
         {/* Header */}
         <div className="mb-3">
           <h1 className="text-xl font-bold tracking-tight text-slate-900">Snow Route Pittsburgh</h1>
@@ -248,7 +303,7 @@ export default function App() {
         </div>
 
         {/* Navigation */}
-        <NavigationPanel mapRef={mapRef} />
+        <NavigationPanel mapRef={mapRef} mapPadding={padding} />
       </aside>
     </div>
   );

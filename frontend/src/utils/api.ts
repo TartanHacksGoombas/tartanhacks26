@@ -1,6 +1,9 @@
-import { ConditionFeatureCollection, SegmentKind } from "./types";
+import { ConditionFeatureCollection, SegmentKind } from "../types";
+import { decodePolyline } from "./polyline";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
+
+/* ── Conditions ── */
 
 export async function fetchConditions(
   bbox: [number, number, number, number],
@@ -63,6 +66,20 @@ export async function resolvePlace(placeId: string): Promise<{ lat: number; lng:
   return { lat: loc.lat, lng: loc.lng };
 }
 
+/** Reverse-geocode coordinates to a human-readable address. */
+export async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+  const res = await fetch(
+    `${API_BASE}/v1/maps/reverse-geocode?` + new URLSearchParams({ latlng: `${lat},${lng}` })
+  );
+  if (!res.ok) return null;
+
+  const data = await res.json();
+  if (data.status !== "OK" || !data.results?.length) return null;
+
+  // Return the first result's formatted address (usually the most specific)
+  return data.results[0].formatted_address ?? null;
+}
+
 /* ── Routing (Google Directions via backend proxy) ── */
 
 export type RouteResult = {
@@ -71,38 +88,6 @@ export type RouteResult = {
   distanceM: number;
   steps: Array<{ instruction: string; distanceM: number; durationSec: number }>;
 };
-
-/** Decode Google's encoded polyline into [lng, lat] pairs for GeoJSON. */
-function decodePolyline(encoded: string): [number, number][] {
-  const points: [number, number][] = [];
-  let index = 0;
-  let lat = 0;
-  let lng = 0;
-
-  while (index < encoded.length) {
-    let shift = 0;
-    let result = 0;
-    let byte: number;
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20);
-    lat += result & 1 ? ~(result >> 1) : result >> 1;
-
-    shift = 0;
-    result = 0;
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20);
-    lng += result & 1 ? ~(result >> 1) : result >> 1;
-
-    points.push([lng / 1e5, lat / 1e5]); // GeoJSON is [lng, lat]
-  }
-  return points;
-}
 
 export async function fetchRoute(
   from: [number, number],
@@ -136,4 +121,66 @@ export async function fetchRoute(
       durationSec: s.duration?.value ?? 0
     }))
   };
+}
+
+/* ── Weather (NWS API — free, no key) ── */
+
+export type WeatherPeriod = {
+  name: string;
+  startTime: string;
+  temperature: number;
+  unit: string;
+  shortForecast: string;
+  isDaytime: boolean;
+};
+
+/** Fetch the 7-day forecast for Pittsburgh from the National Weather Service. */
+export async function fetchWeather(): Promise<WeatherPeriod[]> {
+  const res = await fetch("https://api.weather.gov/gridpoints/PBZ/77,65/forecast", {
+    headers: { "User-Agent": "SnowRoutePittsburgh/1.0" }
+  });
+  if (!res.ok) return [];
+
+  const data = await res.json();
+  const periods: any[] = data.properties?.periods ?? [];
+
+  return periods.map((p) => ({
+    name: p.name,
+    startTime: p.startTime,
+    temperature: p.temperature,
+    unit: p.temperatureUnit,
+    shortForecast: p.shortForecast,
+    isDaytime: p.isDaytime
+  }));
+}
+
+export type HourlyPeriod = {
+  startTime: string;
+  temperature: number;
+  unit: string;
+  shortForecast: string;
+  windSpeed: string;
+  windDirection: string;
+  precipChance: number;
+};
+
+/** Fetch hourly forecast for Pittsburgh (up to 156 hours). */
+export async function fetchWeatherHourly(): Promise<HourlyPeriod[]> {
+  const res = await fetch("https://api.weather.gov/gridpoints/PBZ/77,65/forecast/hourly", {
+    headers: { "User-Agent": "SnowRoutePittsburgh/1.0" }
+  });
+  if (!res.ok) return [];
+
+  const data = await res.json();
+  const periods: any[] = data.properties?.periods ?? [];
+
+  return periods.map((p) => ({
+    startTime: p.startTime,
+    temperature: p.temperature,
+    unit: p.temperatureUnit,
+    shortForecast: p.shortForecast,
+    windSpeed: p.windSpeed ?? "",
+    windDirection: p.windDirection ?? "",
+    precipChance: p.probabilityOfPrecipitation?.value ?? 0
+  }));
 }

@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import { fetchRoute, GeocodeSuggestion, RouteResult } from "../api";
+import { fetchRoute, reverseGeocode, GeocodeSuggestion, RouteResult } from "../utils/api";
 import SearchInput from "./SearchInput";
+import Button from "./Button";
+import ToggleButton from "./ToggleButton";
 
 const ROUTE_SOURCE = "nav-route-src";
 const ROUTE_OUTLINE = "nav-route-outline";
 const ROUTE_LINE = "nav-route-line";
 
-/** Extra left padding so the map doesn't place content behind the sidebar. */
-const SIDEBAR_PADDING = { top: 80, right: 80, bottom: 80, left: 380 };
+type MapPadding = { top: number; right: number; bottom: number; left: number };
 
 type NavigationPanelProps = {
   mapRef: React.RefObject<maplibregl.Map | null>;
+  mapPadding: MapPadding;
 };
 
 /** Ensure the route source + layers exist on the map. Safe to call repeatedly. */
@@ -42,7 +44,7 @@ function ensureRouteLayers(map: maplibregl.Map) {
   }
 }
 
-export default function NavigationPanel({ mapRef }: NavigationPanelProps) {
+export default function NavigationPanel({ mapRef, mapPadding }: NavigationPanelProps) {
   const [open, setOpen] = useState(false);
   const [fromText, setFromText] = useState("");
   const [toText, setToText] = useState("");
@@ -53,6 +55,12 @@ export default function NavigationPanel({ mapRef }: NavigationPanelProps) {
   const [routeError, setRouteError] = useState<string | null>(null);
   const startMarkerRef = useRef<maplibregl.Marker | null>(null);
   const endMarkerRef = useRef<maplibregl.Marker | null>(null);
+
+  // Keep latest padding in a ref so imperative pan calls always use fresh values
+  const paddingRef = useRef(mapPadding);
+  paddingRef.current = mapPadding;
+
+  const geolocatedRef = useRef(false);
 
   /** Lazily create the route layers when the panel first opens. */
   useEffect(() => {
@@ -72,39 +80,153 @@ export default function NavigationPanel({ mapRef }: NavigationPanelProps) {
     return () => { map.off("styledata", addLayers); };
   }, [open, mapRef]);
 
+  /** Create a pin-shaped SVG marker element. */
+  const createPinElement = useCallback((color: string, label: string) => {
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = "width:30px;height:42px;cursor:pointer;";
+    wrapper.innerHTML = `
+      <svg viewBox="0 0 30 42" width="30" height="42" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <filter id="pin-shadow-${label}" x="-20%" y="-10%" width="140%" height="130%">
+            <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.3"/>
+          </filter>
+        </defs>
+        <path d="M15 0C8.1 0 2.5 5.6 2.5 12.5C2.5 22.5 15 42 15 42S27.5 22.5 27.5 12.5C27.5 5.6 21.9 0 15 0Z"
+              fill="${color}" stroke="#fff" stroke-width="1.5" filter="url(#pin-shadow-${label})"/>
+        <circle cx="15" cy="12.5" r="5" fill="#fff"/>
+        <text x="15" y="15.5" text-anchor="middle" fill="${color}" font-size="9" font-weight="bold" font-family="system-ui">${label}</text>
+      </svg>
+    `;
+    return wrapper;
+  }, []);
+
+  /** Auto-fill "From" with user's current location when the panel first opens. */
+  useEffect(() => {
+    if (!open || geolocatedRef.current || fromCoord) return;
+    if (!("geolocation" in navigator)) return;
+
+    geolocatedRef.current = true;
+    setFromText("Locating…");
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const { latitude, longitude } = pos.coords;
+        const coord: [number, number] = [longitude, latitude];
+        setFromCoord(coord);
+
+        // Place the marker
+        const map = mapRef.current;
+        if (map) {
+          const el = createPinElement("#16a34a", "A");
+          if (startMarkerRef.current) startMarkerRef.current.remove();
+          startMarkerRef.current = new maplibregl.Marker({ element: el, anchor: "bottom" })
+            .setLngLat(coord)
+            .addTo(map);
+        }
+
+        // Reverse-geocode for a readable label
+        const address = await reverseGeocode(latitude, longitude);
+        setFromText(address ? address.split(",")[0] : "My Location");
+      },
+      () => {
+        // Geolocation denied or failed — just clear the placeholder
+        setFromText("");
+        geolocatedRef.current = false;
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }, [open, fromCoord, mapRef, createPinElement]);
+
+  /** Place a pin marker. */
   const placeMarker = useCallback(
-    (lngLat: [number, number], color: string, ref: React.MutableRefObject<maplibregl.Marker | null>) => {
+    (lngLat: [number, number], color: string, label: string, ref: React.MutableRefObject<maplibregl.Marker | null>) => {
       const map = mapRef.current;
       if (!map) return;
       if (ref.current) ref.current.remove();
-      const el = document.createElement("div");
-      el.style.cssText = `width:14px;height:14px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.3)`;
-      ref.current = new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map);
+      const el = createPinElement(color, label);
+      ref.current = new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat(lngLat).addTo(map);
+    },
+    [mapRef, createPinElement]
+  );
 
-      const px = map.project(lngLat);
-      if (px.x < SIDEBAR_PADDING.left) {
-        map.easeTo({ center: map.unproject([px.x + SIDEBAR_PADDING.left / 2, px.y]), duration: 400 });
+  /**
+   * Imperatively fit the map to the given points with generous spacing.
+   * Uses paddingRef so it always reads the latest dynamic padding.
+   */
+  const panToFit = useCallback(
+    (points: [number, number][]) => {
+      const map = mapRef.current;
+      console.log("[panToFit] called, points:", points.length, "map:", !!map);
+      if (!map || points.length === 0) return;
+
+      const pad = paddingRef.current;
+      const EXTRA = 60;
+      const fitPad = {
+        top: pad.top + EXTRA,
+        right: pad.right + EXTRA,
+        bottom: pad.bottom + EXTRA,
+        left: pad.left + EXTRA,
+      };
+
+      const mapW = map.getContainer().clientWidth;
+      const mapH = map.getContainer().clientHeight;
+      const usableW = mapW - fitPad.left - fitPad.right;
+      const usableH = mapH - fitPad.top - fitPad.bottom;
+      console.log("[panToFit] pad:", fitPad, "mapSize:", mapW, "x", mapH, "usable:", usableW, "x", usableH);
+
+      // If padding eats up the viewport, fall back to simple padding
+      const safePad = (usableW < 100 || usableH < 100)
+        ? { top: 50, right: 50, bottom: 50, left: 50 }
+        : fitPad;
+
+      if (points.length === 1) {
+        console.log("[panToFit] easeTo single point", points[0]);
+        map.easeTo({ center: points[0], padding: safePad, zoom: 15, duration: 400 });
+        return;
       }
+
+      const bounds = points.reduce(
+        (b, c) => b.extend(c),
+        new maplibregl.LngLatBounds(points[0], points[0])
+      );
+      console.log("[panToFit] fitBounds", bounds.toArray());
+      map.fitBounds(bounds, { padding: safePad, maxZoom: 16, duration: 500 });
     },
     [mapRef]
   );
 
   const pickFrom = useCallback(
     (s: GeocodeSuggestion) => {
+      const coord: [number, number] = [s.lng, s.lat];
       setFromText(s.displayName.split(",")[0]);
-      setFromCoord([s.lng, s.lat]);
-      placeMarker([s.lng, s.lat], "#16a34a", startMarkerRef);
+      setFromCoord(coord);
+      placeMarker(coord, "#16a34a", "A", startMarkerRef);
+      // Pan: use the coord we just got + whatever toCoord is currently set
+      const pts: [number, number][] = [coord];
+      if (endMarkerRef.current) {
+        const ll = endMarkerRef.current.getLngLat();
+        pts.push([ll.lng, ll.lat]);
+      }
+      panToFit(pts);
     },
-    [placeMarker]
+    [placeMarker, panToFit]
   );
 
   const pickTo = useCallback(
     (s: GeocodeSuggestion) => {
+      const coord: [number, number] = [s.lng, s.lat];
       setToText(s.displayName.split(",")[0]);
-      setToCoord([s.lng, s.lat]);
-      placeMarker([s.lng, s.lat], "#dc2626", endMarkerRef);
+      setToCoord(coord);
+      placeMarker(coord, "#dc2626", "B", endMarkerRef);
+      // Pan: use the coord we just got + whatever fromCoord is currently set
+      const pts: [number, number][] = [coord];
+      if (startMarkerRef.current) {
+        const ll = startMarkerRef.current.getLngLat();
+        pts.push([ll.lng, ll.lat]);
+      }
+      panToFit(pts);
     },
-    [placeMarker]
+    [placeMarker, panToFit]
   );
 
   const setRouteData = useCallback(
@@ -139,23 +261,14 @@ export default function NavigationPanel({ mapRef }: NavigationPanelProps) {
       const result = await fetchRoute(fromCoord, toCoord);
       setRouteResult(result);
       const coords = result.geometry.coordinates as [number, number][];
-
       setRouteData(coords);
-
-      const map = mapRef.current;
-      if (map && coords.length > 0) {
-        const bounds = coords.reduce(
-          (b, c) => b.extend(c),
-          new maplibregl.LngLatBounds(coords[0], coords[0])
-        );
-        map.fitBounds(bounds, { padding: SIDEBAR_PADDING });
-      }
+      panToFit([fromCoord, toCoord, ...coords]);
     } catch (e) {
       setRouteError(e instanceof Error ? e.message : "Route failed");
     } finally {
       setRouteLoading(false);
     }
-  }, [fromCoord, toCoord, mapRef, setRouteData]);
+  }, [fromCoord, toCoord, setRouteData, panToFit]);
 
   const clearRoute = useCallback(() => {
     setRouteResult(null);
@@ -173,43 +286,39 @@ export default function NavigationPanel({ mapRef }: NavigationPanelProps) {
 
   return (
     <div className="mt-4 border-t border-slate-200 pt-4">
-      <button
+      <ToggleButton
+        open={open}
+        openLabel="Close navigation"
+        closedLabel="Get directions"
         onClick={() => { setOpen(!open); if (open) clearRoute(); }}
-        className="flex w-full items-center justify-between rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
-      >
-        <span>{open ? "Close navigation" : "Get directions"}</span>
-        <span className="text-lg leading-none">{open ? "×" : "→"}</span>
-      </button>
+      />
 
       {open && (
         <div className="mt-3 space-y-2">
           <SearchInput
             value={fromText}
-            onChange={(t) => { setFromText(t); setFromCoord(null); }}
+            onChange={(t) => { setFromText(t); setFromCoord(null); if (routeResult) { setRouteResult(null); setRouteData([]); } }}
             onSelect={pickFrom}
             placeholder="From (address or place)"
             hasCoord={fromCoord !== null}
           />
           <SearchInput
             value={toText}
-            onChange={(t) => { setToText(t); setToCoord(null); }}
+            onChange={(t) => { setToText(t); setToCoord(null); if (routeResult) { setRouteResult(null); setRouteData([]); } }}
             onSelect={pickTo}
             placeholder="To (address or place)"
             hasCoord={toCoord !== null}
           />
 
           <div className="flex gap-2">
-            <button
+            <Button
+              label={routeLoading ? "Routing..." : "Route"}
               onClick={handleRoute}
               disabled={!fromCoord || !toCoord || routeLoading}
-              className="flex-1 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:opacity-40 hover:bg-blue-700"
-            >
-              {routeLoading ? "Routing..." : "Route"}
-            </button>
+              fullWidth
+            />
             {routeResult && (
-              <button onClick={clearRoute} className="rounded-lg bg-slate-200 px-3 py-2 text-sm text-slate-700 hover:bg-slate-300">
-                Clear
-              </button>
+              <Button label="Clear" onClick={clearRoute} variant="secondary" />
             )}
           </div>
 

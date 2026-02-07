@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from "react";
-import { geocode, resolvePlace, GeocodeSuggestion } from "../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { geocode, resolvePlace, GeocodeSuggestion } from "../utils/api";
 
 type SearchInputProps = {
   value: string;
@@ -18,6 +19,15 @@ export default function SearchInput({ value, onChange, onSelect, placeholder, ha
   const seqRef = useRef(0);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  // Recompute dropdown position whenever the dropdown should be visible
+  useEffect(() => {
+    if (!focused || !inputRef.current) { setDropdownPos(null); return; }
+    const rect = inputRef.current.getBoundingClientRect();
+    setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+  }, [focused, suggestions, loading, value]);
 
   const handleChange = useCallback(
     (text: string) => {
@@ -79,9 +89,44 @@ export default function SearchInput({ value, onChange, onSelect, placeholder, ha
 
   const showDropdown = focused && !resolving;
 
+  // Shared fixed-position style for dropdown elements
+  const dropStyle: React.CSSProperties | undefined = dropdownPos
+    ? { position: "fixed", top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, zIndex: 9999 }
+    : undefined;
+
+  const dropdown = (
+    <>
+      {showDropdown && dropStyle && loading && suggestions.length === 0 && value.length >= 3 && (
+        <div style={dropStyle} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-400 shadow-lg">
+          Searching...
+        </div>
+      )}
+      {showDropdown && dropStyle && !loading && suggestions.length === 0 && value.length >= 3 && !hasCoord && (
+        <div style={dropStyle} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-400 shadow-lg">
+          No results — try adding a street name
+        </div>
+      )}
+      {showDropdown && dropStyle && suggestions.length > 0 && (
+        <ul style={dropStyle} className="max-h-40 overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+          {suggestions.map((s, i) => (
+            <li
+              key={i}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => handlePick(s)}
+              className="cursor-pointer px-3 py-2 text-xs hover:bg-blue-50 truncate"
+            >
+              {s.displayName}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+
   return (
     <div className="relative">
       <input
+        ref={inputRef}
         value={value}
         onChange={(e) => handleChange(e.target.value)}
         onFocus={handleFocus}
@@ -104,30 +149,8 @@ export default function SearchInput({ value, onChange, onSelect, placeholder, ha
       {resolving && (
         <div className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400">Loading…</div>
       )}
-      {showDropdown && loading && suggestions.length === 0 && value.length >= 3 && (
-        <div className="absolute left-0 right-0 top-full z-30 mt-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-400 shadow-lg">
-          Searching...
-        </div>
-      )}
-      {showDropdown && !loading && suggestions.length === 0 && value.length >= 3 && !hasCoord && (
-        <div className="absolute left-0 right-0 top-full z-30 mt-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-400 shadow-lg">
-          No results — try adding a street name
-        </div>
-      )}
-      {showDropdown && suggestions.length > 0 && (
-        <ul className="absolute left-0 right-0 top-full z-30 mt-1 max-h-40 overflow-auto rounded-lg border border-slate-200 bg-white shadow-lg">
-          {suggestions.map((s, i) => (
-            <li
-              key={i}
-              onMouseDown={(e) => e.preventDefault()} // Prevent blur before click registers
-              onClick={() => handlePick(s)}
-              className="cursor-pointer px-3 py-2 text-xs hover:bg-blue-50 truncate"
-            >
-              {s.displayName}
-            </li>
-          ))}
-        </ul>
-      )}
+      {/* Render dropdown in a portal so it escapes the sidebar's overflow clipping */}
+      {createPortal(dropdown, document.body)}
     </div>
   );
 }
