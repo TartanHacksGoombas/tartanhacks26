@@ -69,6 +69,11 @@ agg_dict = {
     "node_count": "sum",
     "data_source": merge_sources,
 }
+
+# Ensure numeric columns are actually numeric (Google rows may have empty strings)
+for col in ["mid_lat", "mid_lng", "node_count"]:
+    if col in df_named.columns:
+        df_named[col] = pd.to_numeric(df_named[col], errors="coerce")
 for col in sparse_str_cols:
     if col in df_named.columns:
         agg_dict[col] = first_non_empty
