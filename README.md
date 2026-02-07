@@ -1,6 +1,6 @@
-# Snow Route Pittsburgh MVP
+# WinterWise
 
-Road-first winter passability map scaffold with:
+Pittsburgh winter road closure prediction and route planning with:
 
 - `frontend/`: React + TypeScript + Tailwind + MapLibre
 - `backend/`: Node + Express + TypeScript

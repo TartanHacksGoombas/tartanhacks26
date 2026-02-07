@@ -1,4 +1,4 @@
-# Snow Route Pittsburgh — What to Do Next
+# WinterWise — What to Do Next
 
 Hackathon goal: **A beautiful app that uses Snowstorm (weather), road map data, snowplow (and other data) to visualize road closure and open roads/sidewalks for users in Pittsburgh.**
 

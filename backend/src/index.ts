@@ -13,7 +13,7 @@ app.use(cors({ origin: config.CORS_ORIGIN }));
 app.use(express.json({ limit: "2mb" }));
 
 app.get("/healthz", (_req, res) => {
-  res.json({ ok: true, service: "winter-passability-backend" });
+  res.json({ ok: true, service: "winterwise-backend" });
 });
 
 app.use("/v1", conditionsRouter);

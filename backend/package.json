@@ -1,8 +1,8 @@
 {
-  "name": "winter-passability-backend",
+  "name": "winterwise-backend",
   "version": "0.2.0",
   "private": true,
-  "description": "Express API for road winter passability scoring with ML predictions",
+  "description": "WinterWise API - Pittsburgh winter road closure prediction service",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",

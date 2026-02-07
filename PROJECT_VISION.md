@@ -1,7 +1,7 @@
-Snow Road Closure Prediction App
+WinterWise
 
 ## Overview
-A web app for everyday Pittsburghers to predict which roads will close during an upcoming snowstorm and plan routes around them.
+WinterWise is a web app for everyday Pittsburghers to predict which roads will close during an upcoming snowstorm and plan routes around them.
 
 ## Core Features (Must-Have)
 - **Road closure prediction**: ML model (with possible heuristic components) predicts closure of Pittsburgh roads during an upcoming snowstorm. Trained on historical road closure data.

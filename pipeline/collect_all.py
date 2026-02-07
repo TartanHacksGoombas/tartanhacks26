@@ -47,7 +47,7 @@ def run_script(module_name):
 def main():
     start_total = time.time()
 
-    print("Snow Road Closure Prediction — Data Collection Pipeline")
+    print("WinterWise — Data Collection Pipeline")
     print("=" * 60)
 
     results = {}
