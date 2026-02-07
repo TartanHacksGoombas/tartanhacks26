@@ -415,7 +415,7 @@ export default function App() {
       <aside ref={sidebarRef} className="absolute left-4 top-4 z-10 w-[320px] max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-xl backdrop-blur">
         {/* Header */}
         <div className="mb-3">
-          <h1 className="text-xl font-bold tracking-tight text-slate-900">Snow Route Pittsburgh</h1>
+          <h1 className="text-xl font-bold tracking-tight text-slate-900">WinterWise</h1>
           <p className="text-sm text-slate-600">
             ML-powered road closure risk predictions.
           </p>

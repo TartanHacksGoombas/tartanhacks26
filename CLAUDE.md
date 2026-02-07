@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Snow Road Closure Prediction App for Pittsburgh. Full-stack web app that predicts which roads will close during snowstorms and plans routes around them. Built for TartanHacks 2026.
+WinterWise — Pittsburgh winter road closure prediction and route planning. Full-stack web app that predicts which roads will close during snowstorms and plans routes around them. Built for TartanHacks 2026.
 
 ## Development Commands
 
