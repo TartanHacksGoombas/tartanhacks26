@@ -150,9 +150,9 @@ def detect_storms(weather_df):
         max_daily_snowfall = group["snowfall_cm"].max()
 
         # Temperature and wind from full window
-        min_temp = storm_weather["temperature_min_c"].min() if "temperature_min_c" in storm_weather.columns else np.nan
-        max_wind = storm_weather["wind_speed_max_kmh"].max() if "wind_speed_max_kmh" in storm_weather.columns else np.nan
-        precip_total = storm_weather["precipitation_mm"].sum() if "precipitation_mm" in storm_weather.columns else np.nan
+        min_temp = storm_weather["temp_min_c"].min() if "temp_min_c" in storm_weather.columns else np.nan
+        max_wind = storm_weather["wind_max_kmh"].max() if "wind_max_kmh" in storm_weather.columns else np.nan
+        precip_total = storm_weather["precip_mm"].sum() if "precip_mm" in storm_weather.columns else np.nan
 
         storms.append({
             "storm_id": len(storms),
@@ -228,17 +228,17 @@ def label_311(segments_df, seg_tree, seg_coords, storms_df, snow_311_df):
         if storm_311.empty:
             continue
 
-        # Spatial: for each 311 point, find nearest segment
+        # Spatial: for each 311 point, find ALL segments within radius
         pts_311 = to_meter_coords(
             storm_311[lat_col].values,
             storm_311[lng_col].values,
         )
-        dists, idxs = seg_tree.query(pts_311)
+        neighbor_lists = seg_tree.query_ball_point(pts_311, r=SPATIAL_311_M)
 
-        # Count per segment (only within threshold)
+        # Count per segment (each complaint counted for every segment in radius)
         counts = {}
-        for dist, idx in zip(dists, idxs):
-            if dist <= SPATIAL_311_M:
+        for neighbors in neighbor_lists:
+            for idx in neighbors:
                 oid = segments_df.iloc[idx]["objectid"]
                 counts[oid] = counts.get(oid, 0) + 1
 
@@ -468,18 +468,18 @@ def label_domi_closures(segments_df, seg_tree, seg_coords, storms_df, domi_df):
         print("  DOMI: No valid rows after cleanup, skipping")
         return {}
 
-    # Spatial: find nearest segment for each DOMI closure
+    # Spatial: find ALL segments within radius for each DOMI closure
     domi_coords = to_meter_coords(
         domi_df[lat_col].values,
         domi_df[lng_col].values,
     )
-    dists, idxs = seg_tree.query(domi_coords)
-    domi_df["_seg_idx"] = idxs
-    domi_df["_seg_dist"] = dists
-    domi_df = domi_df[domi_df["_seg_dist"] <= SPATIAL_DOMI_M]
-    domi_df["_oid"] = domi_df["_seg_idx"].map(
-        lambda i: segments_df.iloc[i]["objectid"]
-    )
+    neighbor_lists = seg_tree.query_ball_point(domi_coords, r=SPATIAL_DOMI_M)
+    # Build a mapping: each DOMI row index → list of segment objectids
+    domi_df = domi_df.reset_index(drop=True)
+    domi_seg_oids = []
+    for i, neighbors in enumerate(neighbor_lists):
+        oids = [segments_df.iloc[idx]["objectid"] for idx in neighbors]
+        domi_seg_oids.append(oids)
 
     # Temporal: for each storm, find overlapping closures
     results = {}
@@ -489,14 +489,15 @@ def label_domi_closures(segments_df, seg_tree, seg_coords, storms_df, domi_df):
         end = pd.Timestamp(storm["window_end"])
 
         mask = (domi_df["_from"] <= end) & (domi_df["_to"] >= start)
-        storm_domi = domi_df[mask]
+        storm_indices = domi_df.index[mask].tolist()
 
-        if storm_domi.empty:
+        if not storm_indices:
             continue
 
-        # Flag segments
-        for oid in storm_domi["_oid"].unique():
-            results[(oid, sid)] = 1
+        # Flag ALL segments within radius of any matching DOMI closure
+        for i in storm_indices:
+            for oid in domi_seg_oids[i]:
+                results[(oid, sid)] = 1
 
     print(f"  DOMI: {len(results)} segment-storm closure flags")
     return results
@@ -508,7 +509,8 @@ def compute_risk_scores(storms_df, segments_df, labels_311, labels_crash,
                         labels_plow, storms_with_plow, labels_domi):
     """Compute composite risk score per segment per storm.
 
-    Uses percentile normalization within each storm, then weighted sum.
+    Uses log-scaled min-max normalization within each storm (zeros stay at 0),
+    then weighted sum.  Also outputs binary label variants.
     """
     all_oids = segments_df["objectid"].values
     n_segments = len(all_oids)
@@ -549,27 +551,32 @@ def compute_risk_scores(storms_df, segments_df, labels_311, labels_crash,
         if not has_any_data:
             continue
 
-        # Percentile normalization (within this storm)
-        def percentile_norm(arr):
-            """Rank-based percentile normalization to [0, 1]."""
+        # Log-scaled min-max normalization (within this storm).
+        # Zeros stay at 0; only segments with actual incidents get > 0.
+        def log_minmax_norm(arr):
+            """Log1p min-max normalization to [0, 1]. Zeros → 0, NaN preserved."""
             valid = ~np.isnan(arr)
-            if valid.sum() == 0 or arr[valid].max() == arr[valid].min():
+            if valid.sum() == 0:
                 result = np.zeros_like(arr)
                 result[~valid] = np.nan
                 return result
-            from scipy.stats import rankdata
+            log_arr = np.log1p(np.clip(arr[valid], 0, None))
+            max_val = log_arr.max()
             result = np.full_like(arr, np.nan, dtype=float)
-            ranks = rankdata(arr[valid], method="average")
-            result[valid] = (ranks - 1) / (ranks.max() - 1 + 1e-10)
+            if max_val > 0:
+                result[valid] = log_arr / max_val
+            else:
+                result[valid] = 0.0
             return result
 
-        pctile_311 = percentile_norm(raw_311)
-        pctile_crash = percentile_norm(raw_crash)
-        pctile_domi = percentile_norm(raw_domi)
-        pctile_plow = percentile_norm(raw_plow)
+        pctile_311 = log_minmax_norm(raw_311)
+        pctile_crash = log_minmax_norm(raw_crash)
+        pctile_domi = log_minmax_norm(raw_domi)
+        pctile_plow = log_minmax_norm(raw_plow)
 
         has_plow = sid in storms_with_plow
 
+        storm_rows = []
         for i, oid in enumerate(all_oids):
             if has_plow:
                 score = (W_311 * pctile_311[i] +
@@ -585,7 +592,14 @@ def compute_risk_scores(storms_df, segments_df, labels_311, labels_crash,
 
             score = max(0.0, min(1.0, score))
 
-            rows.append({
+            # Binary: any proxy source had a signal for this segment
+            any_incident = int(
+                raw_311[i] > 0 or raw_crash[i] > 0
+                or raw_domi[i] > 0
+                or (has_plow and not np.isnan(raw_plow[i]) and raw_plow[i] > 0)
+            )
+
+            storm_rows.append({
                 "objectid": oid,
                 "storm_id": sid,
                 "storm_311_count": raw_311[i],
@@ -593,7 +607,18 @@ def compute_risk_scores(storms_df, segments_df, labels_311, labels_crash,
                 "storm_plow_gap": raw_plow[i] if has_plow else np.nan,
                 "storm_domi_closure": raw_domi[i],
                 "risk_score": round(score, 6),
+                "label_any_incident": any_incident,
             })
+
+        # Compute top-percentile labels within this storm
+        scores = np.array([r["risk_score"] for r in storm_rows])
+        p99 = np.percentile(scores, 99) if len(scores) > 0 else 0
+        p95 = np.percentile(scores, 95) if len(scores) > 0 else 0
+        for r in storm_rows:
+            r["label_top_1pct"] = int(r["risk_score"] >= p99 and r["risk_score"] > 0)
+            r["label_top_5pct"] = int(r["risk_score"] >= p95 and r["risk_score"] > 0)
+
+        rows.extend(storm_rows)
 
     labels_df = pd.DataFrame(rows)
     return labels_df

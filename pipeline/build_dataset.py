@@ -424,7 +424,7 @@ def main():
         "num_lanes", "roadwidth", "oneway", "highway_type_osm", "surface_osm",
         "mid_lat", "mid_lng",
         # Topographic risk
-        "elevation_m", "near_steep_slope", "near_landslide",
+        "elevation_m", "incline", "near_steep_slope", "near_landslide",
         # Structural risk
         "is_bridge", "bridge_age_years",
         # Priority/classification

@@ -147,6 +147,33 @@ def encode_static_features(df):
             out[col] = -1
     out["has_penndot_data"] = (out["penndot_aadt"] != -1).astype(int)
 
+    # ── Incline (parse OSM incline tags like "10%", "up", "down") ────────────
+    if "incline" in df.columns:
+        def _parse_incline(val):
+            s = str(val).strip().lower()
+            if s in ("", "nan", "none"):
+                return 0.0
+            if s == "up":
+                return 5.0  # moderate assumed
+            if s == "down":
+                return -5.0
+            if s == "steep":
+                return 15.0
+            import re
+            m = re.match(r"(-?\d+(?:\.\d+)?)\s*%?", s)
+            if m:
+                return float(m.group(1))
+            return 0.0
+        out["incline_pct"] = df["incline"].apply(_parse_incline)
+    else:
+        out["incline_pct"] = 0.0
+
+    # ── Bridge age (numeric, 0 for non-bridge) ──────────────────────────────
+    if "bridge_age_years" in df.columns:
+        out["bridge_age_years"] = pd.to_numeric(df["bridge_age_years"], errors="coerce").fillna(0)
+    else:
+        out["bridge_age_years"] = 0
+
     # ── Coordinates ───────────────────────────────────────────────────────────
     out["mid_lat"] = pd.to_numeric(df["mid_lat"], errors="coerce")
     out["mid_lng"] = pd.to_numeric(df["mid_lng"], errors="coerce")
@@ -254,8 +281,14 @@ def main():
     # season is metadata, not a feature
     weather_feature_cols = [c for c in sample_weather.columns if c != "season"]
     static_feature_cols = list(sample_static.columns)
-    feature_cols = static_feature_cols + weather_feature_cols
-    all_cols = ["objectid", "storm_id", "risk_score"] + static_feature_cols + weather_feature_cols + ["season"]
+    # Weather × segment interaction features (computed during chunked join)
+    interaction_cols = [
+        "snow_x_steep_slope", "snow_x_incline", "temp_x_bridge",
+        "wind_x_roadwidth", "snow_x_elevation",
+    ]
+    feature_cols = static_feature_cols + weather_feature_cols + interaction_cols
+    label_variant_cols = ["label_any_incident", "label_top_1pct", "label_top_5pct"]
+    all_cols = ["objectid", "storm_id", "risk_score"] + label_variant_cols + static_feature_cols + weather_feature_cols + interaction_cols + ["season"]
 
     del sample_static, sample_weather
 
@@ -284,13 +317,56 @@ def main():
         print(f"  Processing chunk {chunk_num} ({len(chunk)} rows)...")
 
         # Keep only the columns we need from labels
-        label_chunk = chunk[["objectid", "storm_id", "risk_score"]].copy()
+        label_cols_needed = ["objectid", "storm_id", "risk_score"] + [
+            c for c in label_variant_cols if c in chunk.columns
+        ]
+        label_chunk = chunk[label_cols_needed].copy()
 
         # Merge static features
         label_chunk = label_chunk.merge(static, on="objectid", how="inner")
 
         # Merge weather features (includes season)
         label_chunk = label_chunk.merge(weather, on="storm_id", how="inner")
+
+        # Compute weather × segment interaction features
+        snow_col = "total_snowfall_cm" if "total_snowfall_cm" in label_chunk.columns else None
+        temp_col = "min_temp_c" if "min_temp_c" in label_chunk.columns else None
+        wind_col = "max_wind_kmh" if "max_wind_kmh" in label_chunk.columns else None
+
+        if snow_col:
+            label_chunk["snow_x_steep_slope"] = (
+                label_chunk[snow_col] * label_chunk.get("near_steep_slope", 0)
+            ).astype(np.float32)
+            if "incline_pct" in label_chunk.columns:
+                label_chunk["snow_x_incline"] = (
+                    label_chunk[snow_col] * label_chunk["incline_pct"].abs()
+                ).astype(np.float32)
+            else:
+                label_chunk["snow_x_incline"] = np.float32(0)
+            label_chunk["snow_x_elevation"] = (
+                label_chunk[snow_col] * label_chunk.get("elevation_m", 0) / 1000.0
+            ).astype(np.float32)
+        else:
+            for c in ["snow_x_steep_slope", "snow_x_incline", "snow_x_elevation"]:
+                label_chunk[c] = np.float32(0)
+
+        if temp_col:
+            # Lower temp on bridges is riskier (negative temp → positive interaction)
+            label_chunk["temp_x_bridge"] = (
+                (-label_chunk[temp_col]) * label_chunk.get("is_bridge", 0)
+            ).astype(np.float32)
+        else:
+            label_chunk["temp_x_bridge"] = np.float32(0)
+
+        if wind_col:
+            # Narrower roads are more affected by wind
+            rw = label_chunk.get("roadwidth", 0)
+            rw = pd.to_numeric(rw, errors="coerce").fillna(0)
+            label_chunk["wind_x_roadwidth"] = (
+                label_chunk[wind_col] / (rw + 1)
+            ).astype(np.float32)
+        else:
+            label_chunk["wind_x_roadwidth"] = np.float32(0)
 
         # Ensure all feature columns are numeric and filled
         for col in feature_cols:

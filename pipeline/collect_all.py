@@ -84,6 +84,7 @@ def main():
     results["build_labels"] = run_script("build_labels")
     results["build_training_data"] = run_script("build_training_data")
     results["train_model"] = run_script("train_model")
+    results["train_ranker"] = run_script("train_ranker")
     results["predict"] = run_script("predict")
 
     # Summary

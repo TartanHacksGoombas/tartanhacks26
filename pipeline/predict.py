@@ -5,8 +5,14 @@ Two input modes:
     1. NWS forecast: Parse data/weather_forecast_pgh.json from collect_weather_realtime.py
     2. CLI args: --snowfall_cm 10 --min_temp_c -5 --max_wind_kmh 30 --duration_days 2
 
-Scoring: Load model + static features → broadcast weather → predict → clamp [0,1]
-         → categorize (very_low/low/moderate/high/very_high).
+Scoring strategy:
+    - Prefer the LambdaRank model (ranker_lgbm.txt) which includes weather
+      features and interaction terms directly.
+    - Fall back to the regression model (model_lgbm.txt) if the ranker is not
+      available.
+    - Raw ranker scores are converted to [0,1] via a sigmoid-style calibration
+      (no artificial min-max normalization).
+    - Output is deduplicated to one row per objectid.
 
 Outputs:
     - data/predictions_latest.csv
@@ -29,9 +35,11 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Input files
-MODEL_FILE = os.path.join(DATA_DIR, "model_lgbm.txt")
-METADATA_FILE = os.path.join(DATA_DIR, "model_metadata.json")
+# Input files — prefer ranker, fall back to regression
+RANKER_MODEL_FILE = os.path.join(DATA_DIR, "ranker_lgbm.txt")
+RANKER_META_FILE = os.path.join(DATA_DIR, "ranker_metadata.json")
+REGRESSION_MODEL_FILE = os.path.join(DATA_DIR, "model_lgbm.txt")
+REGRESSION_META_FILE = os.path.join(DATA_DIR, "model_metadata.json")
 DATASET_CSV = os.path.join(DATA_DIR, "dataset_prediction_ready.csv")
 FORECAST_JSON = os.path.join(DATA_DIR, "weather_forecast_pgh.json")
 
@@ -39,7 +47,7 @@ FORECAST_JSON = os.path.join(DATA_DIR, "weather_forecast_pgh.json")
 OUTPUT_CSV = os.path.join(DATA_DIR, "predictions_latest.csv")
 OUTPUT_JSON = os.path.join(DATA_DIR, "predictions_latest.json")
 
-# Risk categories
+# Risk categories (applied to calibrated [0,1] scores)
 RISK_THRESHOLDS = [
     (0.0, 0.15, "very_low"),
     (0.15, 0.35, "low"),
@@ -58,15 +66,10 @@ def categorize_risk(score):
 
 
 def parse_nws_forecast(forecast_path):
-    """Extract weather features from NWS forecast JSON.
-
-    Looks for snowfall, temperature, and wind data in the forecast periods.
-    Returns a dict of weather features.
-    """
+    """Extract weather features from NWS forecast JSON."""
     with open(forecast_path, "r") as f:
         forecast = json.load(f)
 
-    # Handle both raw NWS API format and our simplified format
     periods = []
     if "properties" in forecast and "periods" in forecast["properties"]:
         periods = forecast["properties"]["periods"]
@@ -79,14 +82,11 @@ def parse_nws_forecast(forecast_path):
         print("  Warning: No forecast periods found, using defaults")
         return None
 
-    # Aggregate across forecast periods (next 48-72h)
-    temps = []
-    winds = []
+    temps, winds = [], []
     snow_keywords = ["snow", "blizzard", "winter storm", "ice"]
-
     has_snow = False
-    for period in periods[:6]:  # ~3 days of data
-        # Temperature
+
+    for period in periods[:6]:
         temp = period.get("temperature")
         if temp is not None:
             unit = period.get("temperatureUnit", "F")
@@ -94,20 +94,16 @@ def parse_nws_forecast(forecast_path):
                 temp = (temp - 32) * 5 / 9
             temps.append(temp)
 
-        # Wind
         wind_str = period.get("windSpeed", "")
         if isinstance(wind_str, str):
-            # Parse "15 mph" or "10 to 20 mph"
             import re
             nums = re.findall(r"\d+", wind_str)
             if nums:
-                # Convert mph to km/h
                 max_wind = max(int(n) for n in nums) * 1.60934
                 winds.append(max_wind)
         elif isinstance(wind_str, (int, float)):
             winds.append(wind_str * 1.60934)
 
-        # Snow detection
         detail = period.get("detailedForecast", "") or period.get("shortForecast", "")
         if any(kw in detail.lower() for kw in snow_keywords):
             has_snow = True
@@ -115,35 +111,102 @@ def parse_nws_forecast(forecast_path):
     if not has_snow:
         print("  Warning: No snow in forecast. Predictions may show very low risk.")
 
-    # Estimate snowfall from forecast text (rough heuristic)
-    snowfall_cm = 5.0 if has_snow else 0.5  # Conservative default
+    snowfall_cm = 5.0 if has_snow else 0.5
     for period in periods[:6]:
         detail = (period.get("detailedForecast", "") or "").lower()
-        # Look for "3 to 5 inches" patterns
         import re
         inches_match = re.findall(r"(\d+)\s*(?:to\s*(\d+))?\s*inch", detail)
         if inches_match:
             max_inches = max(int(m[1]) if m[1] else int(m[0]) for m in inches_match)
             snowfall_cm = max(snowfall_cm, max_inches * 2.54)
 
-    weather = {
+    return {
         "total_snowfall_cm": round(snowfall_cm, 1),
-        "max_daily_snowfall_cm": round(snowfall_cm, 1),  # Assume single-day event
+        "max_daily_snowfall_cm": round(snowfall_cm, 1),
         "min_temp_c": round(min(temps), 1) if temps else -5.0,
         "max_wind_kmh": round(max(winds), 1) if winds else 20.0,
         "duration_days": 1,
-        "precip_total_mm": round(snowfall_cm * 1.0, 1),  # Rough SWE estimate
+        "precip_total_mm": round(snowfall_cm * 1.0, 1),
     }
-
-    return weather
 
 
 def encode_static_features(df):
     """Encode static features identically to build_training_data.py."""
-    # Import encoding maps from build_training_data
     sys.path.insert(0, _SCRIPT_DIR)
     from build_training_data import encode_static_features as _encode
     return _encode(df)
+
+
+def add_weather_and_interactions(pred_df, weather):
+    """Broadcast weather features and compute interaction terms."""
+    # Weather features (same for every segment)
+    pred_df["total_snowfall_cm"] = np.float32(weather["total_snowfall_cm"])
+    pred_df["max_daily_snowfall_cm"] = np.float32(weather["max_daily_snowfall_cm"])
+    pred_df["min_temp_c"] = np.float32(weather["min_temp_c"])
+    pred_df["max_wind_kmh"] = np.float32(weather["max_wind_kmh"])
+    pred_df["duration_days"] = np.float32(weather["duration_days"])
+    pred_df["precip_total_mm"] = np.float32(weather["precip_total_mm"])
+
+    # Interaction features (must match build_training_data.py)
+    snow = weather["total_snowfall_cm"]
+    temp = weather["min_temp_c"]
+    wind = weather["max_wind_kmh"]
+
+    pred_df["snow_x_steep_slope"] = np.float32(
+        snow * pred_df.get("near_steep_slope", 0))
+    if "incline_pct" in pred_df.columns:
+        pred_df["snow_x_incline"] = np.float32(
+            snow * pred_df["incline_pct"].abs())
+    else:
+        pred_df["snow_x_incline"] = np.float32(0)
+    pred_df["snow_x_elevation"] = np.float32(
+        snow * pred_df.get("elevation_m", 0) / 1000.0)
+    pred_df["temp_x_bridge"] = np.float32(
+        (-temp) * pred_df.get("is_bridge", 0))
+    rw = pd.to_numeric(pred_df.get("roadwidth", 0), errors="coerce").fillna(0)
+    pred_df["wind_x_roadwidth"] = np.float32(wind / (rw + 1))
+
+    return pred_df
+
+
+def compute_weather_severity(weather):
+    """Map weather scenario to a [0.1, 1.0] severity score."""
+    snowfall_f = min(weather["total_snowfall_cm"] / 25.0, 1.0)
+    temp_f = min(max(0, -weather["min_temp_c"]) / 15.0, 1.0)
+    wind_f = min(weather["max_wind_kmh"] / 60.0, 1.0)
+    duration_f = min(weather["duration_days"] / 3.0, 1.0)
+    severity = 0.45 * snowfall_f + 0.20 * temp_f + 0.20 * wind_f + 0.15 * duration_f
+    return max(0.1, min(1.0, severity))
+
+
+def calibrate_scores(raw_scores, weather_severity, calibration=None):
+    """Convert raw ranker scores to [0,1] with weather-aware calibration.
+
+    Strategy:
+      1. Use per-prediction percentile sigmoid to get a segment RANKING in [0,1].
+      2. Apply weather_severity to compress the distribution: light snow pushes
+         most roads toward 0 (low risk), blizzard spreads them out.
+    """
+    n = len(raw_scores)
+    if n == 0:
+        return raw_scores
+
+    # Step 1: Sigmoid based on this prediction's score distribution
+    p75 = np.percentile(raw_scores, 75)
+    p99 = np.percentile(raw_scores, 99)
+    spread = max(p99 - p75, 1e-6)
+    z = (raw_scores - p75) / spread * 3.0
+    ranking_score = 1.0 / (1.0 + np.exp(-z))
+
+    # Step 2: Apply weather severity as a power transform.
+    # severity=1.0 (blizzard)  → exponent ~0.5 → pushes scores UP (more high-risk)
+    # severity=0.1 (light snow) → exponent ~3.0 → pushes scores DOWN (fewer high-risk)
+    # Exponent: higher severity → lower exponent → more spread toward high end
+    exponent = 1.0 / max(weather_severity, 0.1)
+    exponent = max(0.3, min(exponent, 5.0))  # clamp for stability
+    calibrated = np.power(ranking_score, exponent)
+
+    return np.clip(calibrated, 0, 1)
 
 
 def main():
@@ -152,50 +215,45 @@ def main():
     parser = argparse.ArgumentParser(
         description="Predict road closure risk for a weather scenario"
     )
-    parser.add_argument("--snowfall_cm", type=float, default=None,
-                        help="Total snowfall in cm")
-    parser.add_argument("--min_temp_c", type=float, default=None,
-                        help="Minimum temperature in Celsius")
-    parser.add_argument("--max_wind_kmh", type=float, default=None,
-                        help="Maximum wind speed in km/h")
-    parser.add_argument("--duration_days", type=int, default=None,
-                        help="Storm duration in days")
-    parser.add_argument("--precip_mm", type=float, default=None,
-                        help="Total precipitation in mm")
-    parser.add_argument("--use_forecast", action="store_true",
-                        help="Use NWS forecast JSON instead of CLI args")
+    parser.add_argument("--snowfall_cm", type=float, default=None)
+    parser.add_argument("--min_temp_c", type=float, default=None)
+    parser.add_argument("--max_wind_kmh", type=float, default=None)
+    parser.add_argument("--duration_days", type=int, default=None)
+    parser.add_argument("--precip_mm", type=float, default=None)
+    parser.add_argument("--use_forecast", action="store_true")
     args = parser.parse_args()
 
     print("Road Closure Risk Prediction")
     print("=" * 60)
 
-    # ── Load model ────────────────────────────────────────────────────────────
-    print("\nLoading model...")
-    if not os.path.exists(MODEL_FILE):
-        print(f"Error: {MODEL_FILE} not found. Run train_model.py first.")
+    # ── Choose model ──────────────────────────────────────────────────────
+    use_ranker = os.path.exists(RANKER_MODEL_FILE) and os.path.exists(RANKER_META_FILE)
+
+    if use_ranker:
+        model_file = RANKER_MODEL_FILE
+        meta_file = RANKER_META_FILE
+        model_label = "LambdaRank ranker"
+    elif os.path.exists(REGRESSION_MODEL_FILE):
+        model_file = REGRESSION_MODEL_FILE
+        meta_file = REGRESSION_META_FILE
+        model_label = "Regression (fallback)"
+    else:
+        print("Error: No model found. Run train_ranker.py or train_model.py first.")
         sys.exit(1)
 
-    model = lgb.Booster(model_file=MODEL_FILE)
-    print(f"  Model loaded: {model.num_trees()} trees")
-
-    # Load metadata for feature column order
-    if not os.path.exists(METADATA_FILE):
-        print(f"Error: {METADATA_FILE} not found. Run train_model.py first.")
-        sys.exit(1)
-
-    with open(METADATA_FILE, "r") as f:
+    print(f"\nLoading {model_label}...")
+    model = lgb.Booster(model_file=model_file)
+    with open(meta_file, "r") as f:
         metadata = json.load(f)
     feature_cols = metadata["feature_columns"]
-    print(f"  Feature columns: {len(feature_cols)}")
+    print(f"  Model: {model_label} ({model.num_trees()} trees, {len(feature_cols)} features)")
 
-    # ── Determine weather input ───────────────────────────────────────────────
+    # ── Weather input ─────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print("Weather scenario...")
     print(f"{'='*60}")
 
     weather = None
-
-    # Mode 1: NWS forecast
     if args.use_forecast or (args.snowfall_cm is None and os.path.exists(FORECAST_JSON)):
         print("  Mode: NWS forecast")
         if os.path.exists(FORECAST_JSON):
@@ -205,7 +263,6 @@ def main():
         else:
             print(f"  Warning: {FORECAST_JSON} not found")
 
-    # Mode 2: CLI args (override or fallback)
     if weather is None or args.snowfall_cm is not None:
         print("  Mode: CLI arguments")
         weather = {
@@ -221,7 +278,7 @@ def main():
     for k, v in weather.items():
         print(f"    {k}: {v}")
 
-    # ── Load and encode static features ───────────────────────────────────────
+    # ── Load and encode segments ──────────────────────────────────────────
     print(f"\n{'='*60}")
     print("Loading road segments...")
     print(f"{'='*60}")
@@ -231,19 +288,23 @@ def main():
         sys.exit(1)
 
     dataset = pd.read_csv(DATASET_CSV)
-    print(f"  Loaded {len(dataset)} segments")
+
+    # Deduplicate by objectid BEFORE encoding (consistent with training)
+    dataset = dataset.drop_duplicates(subset=["objectid"], keep="first").reset_index(drop=True)
+    print(f"  Loaded {len(dataset)} unique segments")
 
     static = encode_static_features(dataset)
-    print(f"  Encoded {len(static)} segments with {len(static.columns)} features")
+    print(f"  Encoded {len(static)} segments")
 
-    # ── Build prediction matrix (static features only) ──────────────────────
+    # ── Build prediction matrix with weather ──────────────────────────────
     print(f"\n{'='*60}")
     print("Building prediction matrix...")
     print(f"{'='*60}")
 
     pred_df = static.copy()
+    pred_df = add_weather_and_interactions(pred_df, weather)
 
-    # Ensure all feature columns are present and in correct order
+    # Ensure all feature columns present
     for col in feature_cols:
         if col not in pred_df.columns:
             pred_df[col] = 0
@@ -252,64 +313,31 @@ def main():
     X = pred_df[feature_cols]
     print(f"  Prediction matrix: {X.shape}")
 
-    # ── Predict segment-level risk ────────────────────────────────────────────
+    # ── Predict ───────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print("Generating predictions...")
     print(f"{'='*60}")
 
-    # Model predicts segment-level risk (weather was excluded from training).
-    # Outputs are narrow-band because within-storm label variance is small,
-    # so we rescale to [0, 1] via min-max normalization before weather scaling.
     raw_scores = model.predict(X)
+    print(f"  Raw score range: [{raw_scores.min():.4f}, {raw_scores.max():.4f}]")
 
-    # Min-max normalize raw scores to [0, 1] segment risk
-    raw_min = raw_scores.min()
-    raw_max = raw_scores.max()
-    if raw_max > raw_min:
-        segment_risk = (raw_scores - raw_min) / (raw_max - raw_min)
-    else:
-        segment_risk = np.full_like(raw_scores, 0.5)
+    # Compute weather severity for calibration
+    severity = compute_weather_severity(weather)
+    print(f"  Weather severity: {severity:.3f}")
 
-    print(f"  Raw model output range: [{raw_min:.4f}, {raw_max:.4f}]")
-    print(f"  Normalized segment risk: [{segment_risk.min():.4f}, {segment_risk.max():.4f}]")
-
-    # Weather severity score: maps weather conditions to a [0.1, 1.0] scale
-    # where 1.0 = extreme storm. This controls the "ceiling" of risk scores.
-    snowfall_factor = min(weather["total_snowfall_cm"] / 25.0, 1.0)  # 25cm = max
-    temp_factor = min(max(0, -weather["min_temp_c"] - 0) / 15.0, 1.0)  # -15C = max
-    wind_factor = min(weather["max_wind_kmh"] / 60.0, 1.0)  # 60 km/h = max
-    duration_factor = min(weather["duration_days"] / 3.0, 1.0)  # 3 days = max
-
-    weather_severity = (
-        0.45 * snowfall_factor +
-        0.20 * temp_factor +
-        0.20 * wind_factor +
-        0.15 * duration_factor
-    )
-    weather_severity = max(0.1, min(1.0, weather_severity))
-
-    print(f"  Weather severity: {weather_severity:.3f}")
-    print(f"    snowfall={snowfall_factor:.2f}, temp={temp_factor:.2f}, "
-          f"wind={wind_factor:.2f}, duration={duration_factor:.2f}")
-
-    # Final risk: segment_risk scaled by weather severity
-    # Low weather → scores compressed toward 0; extreme weather → full range
-    scores = segment_risk * weather_severity
-    scores = np.clip(scores, 0, 1)
+    # Calibrate: ranking sigmoid + weather-based power transform
+    scores = calibrate_scores(raw_scores, severity)
+    print(f"  Calibrated range: [{scores.min():.4f}, {scores.max():.4f}]")
 
     pred_df["risk_score"] = np.round(scores, 6)
     pred_df["risk_category"] = pred_df["risk_score"].apply(categorize_risk)
 
-    # ── Build output ──────────────────────────────────────────────────────────
-    # Merge back street name and classification from the original dataset.
-    # encode_static_features() drops rows with missing coords and resets the
-    # index, so pred_df's index no longer matches dataset's.  Use the
-    # preserved original-index mapping to look up the correct source rows.
+    # ── Build output ──────────────────────────────────────────────────────
+    # Map back metadata from original dataset (same length after dedup)
     orig_idx = static.attrs.get("_original_index")
     if orig_idx is not None:
         src = dataset.iloc[orig_idx].reset_index(drop=True)
     else:
-        # Fallback: indices happen to align (no rows were dropped)
         src = dataset
 
     output_cols = ["objectid"]
@@ -326,11 +354,11 @@ def main():
 
     output_df = pred_df[output_cols].sort_values("risk_score", ascending=False)
 
-    # ── Save CSV ──────────────────────────────────────────────────────────────
+    # ── Save CSV ──────────────────────────────────────────────────────────
     output_df.to_csv(OUTPUT_CSV, index=False)
     print(f"\n  CSV saved to {OUTPUT_CSV}")
 
-    # ── Save GeoJSON ──────────────────────────────────────────────────────────
+    # ── Save GeoJSON ──────────────────────────────────────────────────────
     features = []
     for _, row in output_df.iterrows():
         feature = {
@@ -355,13 +383,15 @@ def main():
         }
         features.append(feature)
 
+    model_basename = os.path.basename(model_file)
     geojson = {
         "type": "FeatureCollection",
         "metadata": {
             "generated_at": datetime.now().isoformat(),
             "weather_scenario": weather,
+            "model": model_label,
+            "model_file": model_basename,
             "segment_count": len(output_df),
-            "model_file": os.path.basename(MODEL_FILE),
             "risk_distribution": {
                 cat: int((output_df["risk_category"] == cat).sum())
                 for _, _, cat in RISK_THRESHOLDS
@@ -374,10 +404,11 @@ def main():
         json.dump(geojson, f, indent=2)
     print(f"  GeoJSON saved to {OUTPUT_JSON}")
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    # ── Summary ───────────────────────────────────────────────────────────
     print(f"\n{'='*60}")
     print("PREDICTION SUMMARY")
     print(f"{'='*60}")
+    print(f"  Model: {model_label}")
     print(f"  Total segments: {len(output_df)}")
     print(f"  Risk score range: [{output_df['risk_score'].min():.4f}, "
           f"{output_df['risk_score'].max():.4f}]")
@@ -389,8 +420,7 @@ def main():
         print(f"    {cat:12s}: {count:6d} ({pct:5.1f}%)")
 
     print(f"\n  Top 10 highest risk roads:")
-    top10 = output_df.head(10)
-    for _, row in top10.iterrows():
+    for _, row in output_df.head(10).iterrows():
         name = row.get("streetname", "Unknown")
         print(f"    {name:30s}  score={row['risk_score']:.4f}  "
               f"cat={row['risk_category']}")

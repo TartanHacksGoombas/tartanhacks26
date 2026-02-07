@@ -10,7 +10,7 @@ Snow Road Closure Prediction App for Pittsburgh. Predicts which roads will close
 
 ```
 tartanhacks26/
-├── pipeline/        # Data collection (18 scripts) + ML pipeline (4 scripts) + orchestrator + join
+├── pipeline/        # Data collection (18 scripts) + ML pipeline (7 scripts) + orchestrator + join
 ├── legacy/          # CMU-scoped demo scripts (800m radius) + their data
 ├── data/            # Generated pipeline output CSVs/JSONs/Parquet/model (gitignored)
 ├── requirements.txt
@@ -40,7 +40,7 @@ All scripts are standalone and output CSVs to `data/` with a `data_source` colum
 - **collect_landslides.py** — WPRDC Global Landslides (resource `dde1f413`), filtered to Pittsburgh bounding box (~67 records).
 
 **Phase C — Weather Data (independent):**
-- **collect_weather_historical.py** — Open-Meteo daily weather, 11 winter seasons 2014-2025 (~1,664 days).
+- **collect_weather_historical.py** — Open-Meteo daily weather, 11 winter seasons 2014-2025 (~1,664 days). Columns: `snowfall_cm`, `temp_max_c`, `temp_min_c`, `wind_max_kmh`, `precip_mm`.
 - **collect_weather_realtime.py** — NWS API forecast + winter alerts for Pittsburgh.
 - **collect_penndot_winter.py** — PennDOT live winter conditions. Service URL: `winterconditions/winterconditions/MapServer`. Empty between storms.
 
@@ -55,35 +55,44 @@ All scripts are standalone and output CSVs to `data/` with a `data_source` colum
 - **collect_penndot_press.py** — PennDOT District 11 press releases parsed for road closure details. Regex-based text extraction.
 
 **Phase E — Master Join:**
-- **build_dataset.py** — Joins all CSVs into `data/dataset_prediction_ready.csv` (~28,805 rows, 27 columns). Uses scipy KDTree for spatial joins. Coerces lat/lng to numeric before spatial operations. Adds `is_snow_emergency_route`, `domi_closure_count`, `domi_full_closure_count`. Note: dataset has ~17,550 unique objectids but ~28,805 rows due to multi-segment roads.
+- **build_dataset.py** — Joins all CSVs into `data/dataset_prediction_ready.csv` (~28,805 rows, 28 columns). Uses scipy KDTree for spatial joins. Coerces lat/lng to numeric before spatial operations. Adds `is_snow_emergency_route`, `domi_closure_count`, `domi_full_closure_count`, `incline`. Note: dataset has ~17,550 unique objectids but ~28,805 rows due to multi-segment roads.
 
 **Phase F — ML Pipeline (needs Phase E + Phase C):**
-- **build_labels.py** — Detects 126 storm events from historical weather (snowfall >= 1cm, consecutive days grouped, +2 day extension). Labels each of 17,549 unique segments per storm using 4 proxy sources: 311 snow complaints (200m, temporal), winter crashes (200m, monthly proportional allocation by snowfall), plow activity gaps (100m, binary, 3/126 storms have data), DOMI full closures (200m, temporal). Composite risk score via percentile normalization + weighted sum (0.45 × 311 + 0.25 × crash + 0.15 × plow + 0.15 × DOMI). Outputs `storm_events.csv` (126 storms) and `storm_labels.csv` (~2.2M rows).
-- **build_training_data.py** — Encodes 28 static features (ordinal encoding for road class/pavement/highway type, log1p for count features, -1 sentinel for missing PennDOT, bool-to-int for flags). Joins with storm weather features and labels. Writes `training_matrix.parquet` (~2.2M rows × 38 columns) via chunked processing with PyArrow to avoid OOM. Deduplicates segments by objectid.
-- **train_model.py** — LightGBM regression on 28 static features (weather excluded from model to force segment-level differentiation). Storm-level random 90/10 train/val split + temporal test on 2023-25 seasons. 335 trees with strong regularization (`min_child_samples=200`, `lambda_l2=2.0`, `max_depth=7`). Outputs `model_lgbm.txt`, `model_metadata.json`, `feature_importance.csv`.
-- **predict.py** — Two input modes: NWS forecast JSON parsing or CLI args (`--snowfall_cm`, `--min_temp_c`, `--max_wind_kmh`, `--duration_days`). Loads model for segment-level risk, applies weather severity multiplier (snowfall/temp/wind/duration → 0.1–1.0 scale), min-max normalizes to [0,1], categorizes (very_low/low/moderate/high/very_high). Outputs `predictions_latest.csv` and `predictions_latest.json` (GeoJSON).
+- **build_labels.py** — Detects 126 storm events from historical weather (snowfall >= 1cm, consecutive days grouped, +2 day extension). Labels each of 17,549 unique segments per storm using 4 proxy sources: 311 snow complaints (200m, `query_ball_point`), winter crashes (200m, monthly proportional allocation by snowfall), plow activity gaps (100m, binary, 3/126 storms have data), DOMI full closures (200m, `query_ball_point`). Composite risk score via log-scaled min-max normalization (zeros → 0) + weighted sum (0.45 × 311 + 0.25 × crash + 0.15 × plow + 0.15 × DOMI). Also outputs label variants: `label_any_incident` (binary), `label_top_1pct`, `label_top_5pct`. Outputs `storm_events.csv` (126 storms) and `storm_labels.csv` (~2.2M rows).
+- **build_training_data.py** — Encodes 31 static features (ordinal encoding for road class/pavement/highway type, log1p for count features, -1 sentinel for missing PennDOT, bool-to-int for flags, `incline_pct` parsed from OSM strings, `bridge_age_years`). Joins with 6 storm weather features and 5 weather × segment interaction features (`snow_x_steep_slope`, `snow_x_incline`, `temp_x_bridge`, `wind_x_roadwidth`, `snow_x_elevation`). Carries label variants. Writes `training_matrix.parquet` (~2.2M rows × 48 columns) via chunked processing with PyArrow to avoid OOM. Deduplicates segments by objectid.
+- **train_model.py** — LightGBM regression on 35 static + interaction features (weather excluded). Storm-level random 90/10 train/val split + temporal test on 2023-25 seasons. Strong regularization (`min_child_samples=200`, `lambda_l2=2.0`, `max_depth=7`). Outputs `model_lgbm.txt`, `model_metadata.json`, `feature_importance.csv`.
+- **train_ranker.py** — LightGBM LambdaRank grouped by `storm_id`, with 41 features including weather and interactions. Discretizes continuous risk scores into 5 relevance grades (0–4). Subsamples query groups to fit LightGBM's 10k/query limit (keeps all positive segments, fills remaining with negatives). Early stopping on NDCG@{50,200}. Outputs `ranker_lgbm.txt`, `ranker_metadata.json` (includes calibration stats), `ranker_feature_importance.csv`.
+- **evaluate.py** — Evaluates both regression and ranker models on temporal holdout (2023-25). Reports per-storm NDCG@{50,200,500}, Recall@{200,500}, mean Spearman, PR-AUC for binary `label_any_incident`, and RMSE/MAE/R² for regression. Outputs `model_report.json`.
+- **predict.py** — Prefers ranker model (falls back to regression). Two input modes: NWS forecast JSON parsing or CLI args (`--snowfall_cm`, `--min_temp_c`, `--max_wind_kmh`, `--duration_days`). Deduplicates segments by `objectid` before encoding. Broadcasts weather features and computes interaction features. Calibrates via sigmoid ranking + weather-severity power transform (light snow compresses scores toward 0, blizzard spreads them). Categorizes (very_low/low/moderate/high/very_high). Outputs `predictions_latest.csv` and `predictions_latest.json` (GeoJSON).
 
 **Orchestrator:**
-- **collect_all.py** — Runs all scripts in dependency order (Phases A→F).
+- **collect_all.py** — Runs all scripts in dependency order (Phases A→F, including both train_model and train_ranker).
 
 ### ML Model Details
 
 **Label construction** (no ground-truth closure labels exist):
 - Storm events detected from weather history (snowfall >= 1cm days, grouped consecutively)
-- Per-segment risk constructed from 4 noisy proxy sources via spatial+temporal joins
-- Within-storm percentile normalization ensures relative ranking, not absolute risk
+- Per-segment risk constructed from 4 noisy proxy sources via spatial+temporal `query_ball_point` joins (radius-based, all segments within range)
+- Within-storm log-scaled min-max normalization: `log1p(x) / log1p(max)`. Zeros stay at 0 (no artificial inflation of "no incident" segments)
+- Label variants: `label_any_incident` (binary), `label_top_1pct` / `label_top_5pct` (within-storm percentile flags)
 
-**Model architecture**:
-- LightGBM regression, 335 boosted trees, 28 static features
-- Weather excluded from model features — all segments share the same weather per prediction, so weather would dominate and prevent segment differentiation
-- Weather applied as a post-hoc severity multiplier at prediction time
-- Top features: snow_complaint_count (13.5%), plow_coverage_score (12.5%), domi_closure_count (9.8%), mid_lat (9.3%), roadwidth (8.5%), elevation_m (8.0%)
+**Primary model — LambdaRank ranker** (recommended):
+- LightGBM LambdaRank, 43 boosted trees, 41 features (static + weather + interactions)
+- Grouped by `storm_id` — directly optimises within-storm road ranking (NDCG)
+- Risk scores discretized into 5 relevance grades (0=no risk, 1-4=quartiles of nonzero risk)
+- Calibration stats saved in metadata for absolute score calibration at prediction time
+- Top features: snow_complaint_count (22.6%), winter_crash_count (21.0%), mid_lat (6.7%), min_temp_c (6.5%), snow_complaint_count_log (6.0%)
+- Test metrics (2023-25 holdout): NDCG@200=0.301, Recall@500=0.211, Spearman=0.018
 
-**Prediction output**:
-- Light snow (3cm): nearly all roads very_low, ~10 reach low
-- Moderate storm (15cm): ~7% low, ~0.1% moderate, 4 high
-- Blizzard (30cm, -15C, 60km/h): 35% low, 1.4% moderate, 59 high, 16 very_high
-- Highest-risk roads: steep areas (Hazelwood, Riverview), bridge corridors (Carson St, Ohio River Blvd), poorly-plowed local roads
+**Secondary model — Regression** (fallback):
+- LightGBM regression, 11 boosted trees, 35 features (static + interactions, weather excluded)
+- Test metrics: RMSE=0.099, Spearman=0.223, PR-AUC=0.358
+
+**Prediction output** (with weather-aware calibration):
+- Light snow (3cm): 88% very_low, 8% low, 2% moderate, 1% high, 1% very_high
+- Moderate storm (15cm): 47% very_low, 32% low, 16% moderate, 3% high, 3% very_high
+- Blizzard (30cm, -15C, 60km/h): 0% very_low, 52% low, 30% moderate, 15% high, 4% very_high
+- Highest-risk roads: steep areas (Hazelwood, Riverview), bridge corridors (Fort Pitt Bridge, Carson St), poorly-plowed local roads (Meredith St, Pandora Way, Redrose Ave)
 
 ## Running the Pipeline
 
@@ -97,6 +106,8 @@ python pipeline/collect_all.py
 python pipeline/build_labels.py
 python pipeline/build_training_data.py
 python pipeline/train_model.py
+python pipeline/train_ranker.py
+python pipeline/evaluate.py
 python pipeline/predict.py --snowfall_cm 15 --min_temp_c -8 --max_wind_kmh 40 --duration_days 2
 ```
 
@@ -119,10 +130,11 @@ requirements.txt: requests, pandas, numpy, scipy, lightgbm, scikit-learn, pyarro
 
 ## Data Notes
 
-- `dataset_prediction_ready.csv` has ~28,805 rows but only ~17,550 unique `objectid`s (duplicate segments from multi-segment roads). ML scripts deduplicate by objectid, keeping first occurrence.
-- `storm_labels.csv` is ~91MB (~2.2M rows). `build_training_data.py` reads it in 500K-row chunks to avoid OOM.
-- `training_matrix.parquet` uses float32 and chunked Parquet writing via PyArrow for memory efficiency.
+- `dataset_prediction_ready.csv` has ~28,805 rows but only ~17,550 unique `objectid`s (duplicate segments from multi-segment roads). ML scripts deduplicate by objectid, keeping first occurrence. `predict.py` also deduplicates before encoding for one-row-per-segment output.
+- `storm_labels.csv` is ~91MB (~2.2M rows) with columns: `objectid`, `storm_id`, `storm_311_count`, `storm_crash_score`, `storm_plow_gap`, `storm_domi_closure`, `risk_score`, `label_any_incident`, `label_top_1pct`, `label_top_5pct`. `build_training_data.py` reads it in 500K-row chunks to avoid OOM.
+- `training_matrix.parquet` uses float32 and chunked Parquet writing via PyArrow for memory efficiency. Contains 48 columns: objectid, storm_id, risk_score, 3 label variants, 31 static features, 6 weather features, 5 interaction features, season.
 - Plow activity data only covers 3 of 126 storms (2018-2020 events). `storm_plow_gap` is NaN for the other 123 storms; label weights are renormalized accordingly.
+- Weather column names in `weather_historical_pgh.csv`: `snowfall_cm`, `temp_min_c`, `temp_max_c`, `wind_max_kmh`, `precip_mm`. These must match references in `build_labels.py:detect_storms()`.
 
 ## External API Notes
 
@@ -145,3 +157,5 @@ WPRDC resource IDs and PennDOT ArcGIS service URLs change over time. If a script
 - Stream large downloads with `requests.get(url, stream=True)`
 - Generated data files go in `data/` (gitignored)
 - ML scripts use `build_training_data.encode_static_features()` as the single source of truth for feature encoding (shared between training and prediction)
+- Label normalization uses `log1p(x) / log1p(max)` so that zero-count segments map to 0.0 (not inflated by tied-rank averaging)
+- Spatial labeling in `build_labels.py` uses `query_ball_point` (all segments within radius) to match `build_dataset.py` feature engineering

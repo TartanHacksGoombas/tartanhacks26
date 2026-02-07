@@ -195,7 +195,8 @@ def main():
     # segments in a given storm and dominate the model, preventing it from
     # learning segment-level risk differentiation. Weather severity is applied
     # as a multiplier at prediction time instead.
-    meta_cols = {"objectid", "storm_id", "risk_score", "season"}
+    meta_cols = {"objectid", "storm_id", "risk_score", "season",
+                 "label_any_incident", "label_top_1pct", "label_top_5pct"}
     weather_cols = {"total_snowfall_cm", "max_daily_snowfall_cm", "min_temp_c",
                     "max_wind_kmh", "duration_days", "precip_total_mm"}
     feature_cols = [c for c in df.columns if c not in meta_cols and c not in weather_cols]
