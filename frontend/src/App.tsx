@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { LngLatBounds } from "maplibre-gl";
 import { fetchConditions } from "./utils/api";
 import { ConditionFeatureCollection, SegmentKind } from "./types";
@@ -7,6 +7,7 @@ import PillButton from "./components/PillButton";
 import StatusCard from "./components/StatusCard";
 import NavigationPanel from "./components/NavigationPanel";
 import WeatherBar from "./components/WeatherBar";
+import TimeSlider from "./components/TimeSlider";
 
 const SOURCE_ID = "conditions-source";
 const LAYER_ID = "conditions-layer";
@@ -56,6 +57,7 @@ export default function App() {
   const mapRef = useRef<maplibregl.Map | null>(null);
   const { sidebarRef, weatherRef, padding } = useMapPadding();
   const [kind, setKind] = useState<SegmentKind>("road");
+  const [dayOffset, setDayOffset] = useState(0);
   const [mapReady, setMapReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
@@ -204,7 +206,8 @@ export default function App() {
 
       try {
         const bbox = boundsToBbox(map.getBounds());
-        const data = await fetchConditions(bbox, kind);
+        // Pass dayOffset so the backend can serve day-specific predictions
+        const data = await fetchConditions(bbox, kind, dayOffset);
 
         const mapData = {
           type: "FeatureCollection",
@@ -249,7 +252,7 @@ export default function App() {
     load();
     map.on("moveend", load);
     return () => { map.off("moveend", load); };
-  }, [kind, mapReady]);
+  }, [kind, dayOffset, mapReady]);
 
   // ── Render ──
   return (
@@ -262,7 +265,12 @@ export default function App() {
         style={{ width: "100%", height: "100%", minHeight: "100vh" }}
       />
 
-      <WeatherBar ref={weatherRef} />
+      <WeatherBar ref={weatherRef} activeDayOffset={dayOffset} />
+
+      {/* Time slider — top center, spanning between sidebar and weather bar */}
+      <div className="absolute top-4 z-20" style={{ left: "calc(320px + 2rem + 1rem)", right: "calc(500px + 2rem + 1rem)" }}>
+        <TimeSlider value={dayOffset} onChange={setDayOffset} />
+      </div>
 
       <aside ref={sidebarRef} className="absolute left-4 top-4 z-10 w-[320px] max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-xl backdrop-blur">
         {/* Header */}
@@ -297,7 +305,14 @@ export default function App() {
         {/* Status bar */}
         <div className="mt-4 space-y-1 text-xs text-slate-600">
           <div>Visible segments: {totalVisible}</div>
-          <div>{loading ? "Refreshing..." : "Map synced to viewport"}</div>
+          <div>
+            {loading ? "Refreshing..." : "Map synced to viewport"}
+            {dayOffset > 0 && (
+              <span className="ml-1 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                +{dayOffset}d forecast
+              </span>
+            )}
+          </div>
           {lastUpdated ? <div>Updated: {new Date(lastUpdated).toLocaleTimeString()}</div> : null}
           <div className="h-4 truncate text-red-700" title={error ?? ""}>{error ?? "\u00A0"}</div>
         </div>

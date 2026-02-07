@@ -156,7 +156,6 @@ export default function NavigationPanel({ mapRef, mapPadding }: NavigationPanelP
   const panToFit = useCallback(
     (points: [number, number][]) => {
       const map = mapRef.current;
-      console.log("[panToFit] called, points:", points.length, "map:", !!map);
       if (!map || points.length === 0) return;
 
       const pad = paddingRef.current;
@@ -172,7 +171,6 @@ export default function NavigationPanel({ mapRef, mapPadding }: NavigationPanelP
       const mapH = map.getContainer().clientHeight;
       const usableW = mapW - fitPad.left - fitPad.right;
       const usableH = mapH - fitPad.top - fitPad.bottom;
-      console.log("[panToFit] pad:", fitPad, "mapSize:", mapW, "x", mapH, "usable:", usableW, "x", usableH);
 
       // If padding eats up the viewport, fall back to simple padding
       const safePad = (usableW < 100 || usableH < 100)
@@ -180,7 +178,6 @@ export default function NavigationPanel({ mapRef, mapPadding }: NavigationPanelP
         : fitPad;
 
       if (points.length === 1) {
-        console.log("[panToFit] easeTo single point", points[0]);
         map.easeTo({ center: points[0], padding: safePad, zoom: 15, duration: 400 });
         return;
       }
@@ -189,7 +186,6 @@ export default function NavigationPanel({ mapRef, mapPadding }: NavigationPanelP
         (b, c) => b.extend(c),
         new maplibregl.LngLatBounds(points[0], points[0])
       );
-      console.log("[panToFit] fitBounds", bounds.toArray());
       map.fitBounds(bounds, { padding: safePad, maxZoom: 16, duration: 500 });
     },
     [mapRef]

@@ -197,7 +197,12 @@ function PrecipGraph({ hours }: { hours: HourlyPeriod[] }) {
 
 /* ── Main Component ── */
 
-const WeatherBar = forwardRef<HTMLDivElement>(function WeatherBar(_props, ref) {
+type WeatherBarProps = {
+  /** Day offset from the time slider (0 = today). When set, highlights that day. */
+  activeDayOffset?: number;
+};
+
+const WeatherBar = forwardRef<HTMLDivElement, WeatherBarProps>(function WeatherBar({ activeDayOffset }, ref) {
   const [periods, setPeriods] = useState<WeatherPeriod[]>([]);
   const [hourly, setHourly] = useState<HourlyPeriod[]>([]);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
@@ -208,6 +213,16 @@ const WeatherBar = forwardRef<HTMLDivElement>(function WeatherBar(_props, ref) {
   }, []);
 
   const days = groupByDay(periods);
+
+  // Sync expanded panel with time slider's day offset
+  useEffect(() => {
+    if (activeDayOffset !== undefined && days.length > 0) {
+      if (activeDayOffset < days.length) {
+        setSelectedIdx(activeDayOffset);
+      }
+    }
+  }, [activeDayOffset, days.length]);
+
   if (days.length === 0) return null;
 
   const selected = selectedIdx !== null ? days[selectedIdx] : null;

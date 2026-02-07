@@ -197,6 +197,118 @@ adminRouter.post("/ingest/ml-predictions", async (req, res) => {
   }
 });
 
+/**
+ * POST /v1/admin/ml-predictions-geojson
+ *
+ * Accepts the ML model's GeoJSON output directly.  Each Feature is a Point
+ * with a `risk_score` (0–1).  We spatial-match each point to the nearest
+ * road segment in the DB (within 100 m) and update that segment's
+ * closure_probability & label.
+ *
+ * Body: standard GeoJSON FeatureCollection with Point features.
+ * Each feature.properties must include `risk_score` (number 0–1).
+ */
+adminRouter.post("/ml-predictions-geojson", async (req, res) => {
+  try {
+    const body = req.body;
+    if (!body || body.type !== "FeatureCollection" || !Array.isArray(body.features)) {
+      return res.status(400).json({ error: "Body must be a GeoJSON FeatureCollection" });
+    }
+
+    const features: any[] = body.features;
+    const client = await db.connect();
+    let matched = 0;
+    let skipped = 0;
+
+    try {
+      await client.query("BEGIN");
+
+      for (const feature of features) {
+        // Validate the feature
+        const geom = feature?.geometry;
+        const props = feature?.properties;
+        if (!geom || geom.type !== "Point" || !Array.isArray(geom.coordinates) || geom.coordinates.length < 2) {
+          skipped++;
+          continue;
+        }
+        const riskScore = typeof props?.risk_score === "number" ? props.risk_score : null;
+        if (riskScore === null || riskScore < 0 || riskScore > 1) {
+          skipped++;
+          continue;
+        }
+
+        const [lng, lat] = geom.coordinates;
+        const label = probabilityToLabel(riskScore);
+        const score = Math.round((1 - riskScore) * 100);
+        const streetName = props.streetname ?? props.street_name ?? props.name ?? null;
+        const reasons = JSON.stringify([{
+          code: "ml_closure_probability",
+          weight: Math.round(riskScore * 100),
+          detail: `ML risk: ${(riskScore * 100).toFixed(0)}%${streetName ? ` (${streetName})` : ""}${props.risk_category ? ` [${props.risk_category}]` : ""}`
+        }]);
+
+        // Find the nearest road segment within 100 m.
+        // If the prediction includes a street name, prefer a name-matching segment.
+        const { rows } = await client.query(
+          `
+          SELECT s.id,
+                 ST_Distance(s.geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS dist_m
+          FROM segments s
+          WHERE ST_DWithin(s.geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 100)
+          ORDER BY
+            CASE WHEN $3::text IS NOT NULL AND UPPER(s.name) = UPPER($3::text) THEN 0 ELSE 1 END,
+            dist_m
+          LIMIT 1
+          `,
+          [lng, lat, streetName]
+        );
+
+        if (rows.length === 0) {
+          skipped++;
+          continue;
+        }
+
+        const segmentId = rows[0].id;
+
+        await client.query(
+          `
+          INSERT INTO segment_status_current (segment_id, score, label, reasons, updated_at, closure_probability)
+          VALUES ($1, $2, $3, $4::jsonb, NOW(), $5)
+          ON CONFLICT (segment_id)
+          DO UPDATE SET
+            score = EXCLUDED.score,
+            label = EXCLUDED.label,
+            reasons = EXCLUDED.reasons,
+            updated_at = NOW(),
+            closure_probability = EXCLUDED.closure_probability
+          `,
+          [segmentId, score, label, reasons, riskScore]
+        );
+        matched++;
+      }
+
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK");
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    return res.json({
+      ok: true,
+      total: features.length,
+      matched,
+      skipped,
+      message: `Updated ${matched} road segments from ${features.length} ML predictions (${skipped} skipped — no nearby segment or invalid data).`
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "ML GeoJSON ingest failed"
+    });
+  }
+});
+
 adminRouter.post("/recompute-scores", async (_req, res) => {
   try {
     const result = await recomputeScores();

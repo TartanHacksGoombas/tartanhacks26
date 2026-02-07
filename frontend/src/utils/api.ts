@@ -7,13 +7,22 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:4000";
 
 export async function fetchConditions(
   bbox: [number, number, number, number],
-  kind: SegmentKind
+  kind: SegmentKind,
+  dayOffset: number = 0
 ): Promise<ConditionFeatureCollection> {
-  const query = new URLSearchParams({
+  const params: Record<string, string> = {
     bbox: bbox.join(","),
     kind
-  });
+  };
 
+  // Pass the target date so the backend can serve day-specific predictions
+  if (dayOffset > 0) {
+    const target = new Date();
+    target.setDate(target.getDate() + dayOffset);
+    params.target_date = target.toISOString().split("T")[0]; // YYYY-MM-DD
+  }
+
+  const query = new URLSearchParams(params);
   const response = await fetch(`${API_BASE}/v1/conditions?${query.toString()}`);
 
   if (!response.ok) {
