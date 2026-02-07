@@ -234,9 +234,9 @@ def join_penndot(base_df, penndot_df, threshold_m=100):
         if dist <= threshold_m:
             base_idx = base_valid.index[i]
             row = penndot_valid.iloc[idx]
-            base_df.loc[base_idx, "penndot_route"] = row.get("route_no", "")
-            base_df.loc[base_idx, "penndot_aadt"] = row.get("aadt", "")
-            base_df.loc[base_idx, "penndot_pavement_idx"] = row.get("pavement_condition", "")
+            base_df.loc[base_idx, "penndot_route"] = str(row.get("route_no", ""))
+            base_df.loc[base_idx, "penndot_aadt"] = str(row.get("aadt", ""))
+            base_df.loc[base_idx, "penndot_pavement_idx"] = str(row.get("pavement_condition", ""))
 
     matched = (base_df["penndot_route"] != "").sum()
     print(f"    Matched {matched}/{len(base_df)} segments to PennDOT routes")
