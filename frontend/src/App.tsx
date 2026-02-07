@@ -7,9 +7,13 @@ import StatusCard from "./components/StatusCard";
 import NavigationPanel from "./components/NavigationPanel";
 import WeatherBar from "./components/WeatherBar";
 import TimeSlider from "./components/TimeSlider";
+import LocationButton from "./components/LocationButton";
 
 const SOURCE_ID = "conditions-source";
 const LAYER_ID = "conditions-layer";
+const USER_LOC_SOURCE = "user-location-source";
+const USER_LOC_DOT = "user-location-dot";
+const USER_LOC_RING = "user-location-ring";
 
 type StatusCounts = {
   open: number;
@@ -66,6 +70,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [predictionStatus, setPredictionStatus] = useState<PredictionStatus>("idle");
   const [weatherParams, setWeatherParams] = useState<WeatherParams | null>(null);
+  const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+  const watchIdRef = useRef<number | null>(null);
+  const pendingLocationRef = useRef<{ lng: number; lat: number; accuracy: number } | null>(null);
 
   const totalVisible = useMemo(
     () => counts.open + counts.low_risk + counts.moderate_risk + counts.closed,
@@ -86,6 +93,98 @@ export default function App() {
       console.error("Prediction failed:", e);
       setPredictionStatus("error");
     }
+  }, []);
+
+  // ── Apply location to map (add layers if needed, update source, pan) ──
+  const applyLocationToMap = useCallback((map: maplibregl.Map, lng: number, lat: number, accuracy: number, pan: boolean) => {
+    const geoJson: GeoJSON.FeatureCollection = {
+      type: "FeatureCollection",
+      features: [{ type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: { accuracy } }]
+    };
+
+    if (map.getSource(USER_LOC_SOURCE)) {
+      (map.getSource(USER_LOC_SOURCE) as maplibregl.GeoJSONSource).setData(geoJson);
+    } else {
+      map.addSource(USER_LOC_SOURCE, { type: "geojson", data: geoJson });
+
+      map.addLayer({
+        id: USER_LOC_RING,
+        type: "circle",
+        source: USER_LOC_SOURCE,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 20, 18, 60],
+          "circle-color": "rgba(66,133,244,0.15)",
+          "circle-stroke-color": "rgba(66,133,244,0.3)",
+          "circle-stroke-width": 1
+        }
+      }, "labels");
+
+      map.addLayer({
+        id: USER_LOC_DOT,
+        type: "circle",
+        source: USER_LOC_SOURCE,
+        paint: {
+          "circle-radius": 7,
+          "circle-color": "#4285F4",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 2.5
+        }
+      }, "labels");
+    }
+
+    if (pan) {
+      map.easeTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 14), duration: 800 });
+    }
+  }, []);
+
+  // ── User location handler ──
+  const handleUserLocation = useCallback((lng: number, lat: number, accuracy: number) => {
+    setUserLocation([lng, lat]);
+
+    const map = mapRef.current;
+    if (!map || !map.isStyleLoaded()) {
+      // Map not ready yet — queue the location to apply once it loads
+      pendingLocationRef.current = { lng, lat, accuracy };
+      return;
+    }
+
+    pendingLocationRef.current = null;
+    applyLocationToMap(map, lng, lat, accuracy, true);
+
+    // Start continuous watch if not already watching
+    if (watchIdRef.current == null && navigator.geolocation) {
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        (pos) => {
+          const coord: [number, number] = [pos.coords.longitude, pos.coords.latitude];
+          setUserLocation(coord);
+          const m = mapRef.current;
+          if (m && m.isStyleLoaded()) {
+            applyLocationToMap(m, coord[0], coord[1], pos.coords.accuracy, false);
+          }
+        },
+        () => {},
+        { enableHighAccuracy: true }
+      );
+    }
+  }, [applyLocationToMap]);
+
+  // Request location automatically on mount (pending ref handles map not ready yet)
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => handleUserLocation(pos.coords.longitude, pos.coords.latitude, pos.coords.accuracy),
+      () => {},  // silently ignore denial on auto-request
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }, [handleUserLocation]);
+
+  // Clean up geolocation watch on unmount
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current != null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+      }
+    };
   }, []);
 
   // ── Map init ──
@@ -200,6 +299,13 @@ export default function App() {
       }
 
       setMapReady(true);
+
+      // Apply any location that arrived before map was ready
+      const pending = pendingLocationRef.current;
+      if (pending) {
+        pendingLocationRef.current = null;
+        applyLocationToMap(map, pending.lng, pending.lat, pending.accuracy, true);
+      }
     });
 
     return () => { map.remove(); mapRef.current = null; };
@@ -275,6 +381,11 @@ export default function App() {
       />
 
       <WeatherBar ref={weatherRef} activeDayOffset={dayOffset} onSnowDetected={handleSnowDetected} />
+
+      {/* Location button — above MapLibre nav controls */}
+      <div className="absolute z-10" style={{ bottom: 120, right: 10 }}>
+        <LocationButton onLocation={handleUserLocation} />
+      </div>
 
       {/* Time slider */}
       <div className="absolute top-4 z-20" style={{ left: "calc(320px + 2rem + 1rem)", right: "calc(500px + 2rem + 1rem)" }}>
