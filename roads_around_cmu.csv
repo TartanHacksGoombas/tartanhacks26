@@ -1,0 +1,58 @@
+name,latitude,longitude,source,place_id
+Schenley Drive,40.44018930000001,-79.94695039999999,roads_api,ChIJ35dHrSDyNIgRNYNhOFTDKR4
+Frew Street,40.44097186980579,-79.94451405798449,roads_api,ChIJ_dVEXyDyNIgRVuT3rENLzts
+Frew Street,40.44061414995581,-79.94280827211028,roads_api,ChIJ0YAlFiDyNIgRN-WDXEkxWTY
+Frew Street,40.4404377,-79.9408322,roads_api,ChIJsTAxix_yNIgR5uXKM46wFpw
+Frew Street,40.4404377,-79.9408322,roads_api,ChIJsTAxix_yNIgR5-XKM46wFpw
+Northumberland Street,40.44047327085195,-79.9393117009076,roads_api,ChIJa8pfth_yNIgRws06FV4zhWU
+Northumberland Street,40.44047327085195,-79.9393117009076,roads_api,ChIJa8pfth_yNIgRw806FV4zhWU
+Frew Street,40.4413965020705,-79.94656399104683,roads_api,ChIJ-RrvwyDyNIgRiu4xG72W8J0
+Margaret Morrison Street,40.44203024537428,-79.9427812212523,roads_api,ChIJmy5_zCHyNIgRQAtUaP73xdk
+Margaret Morrison Street,40.44203024537428,-79.9427812212523,roads_api,ChIJmy5_zCHyNIgRQQtUaP73xdk
+Margaret Morrison Street,40.44175691241416,-79.94102595083308,roads_api,ChIJFaOedx_yNIgRViwrz7AvwdY
+Margaret Morrison Street,40.44175691241416,-79.94102595083308,roads_api,ChIJFaOedx_yNIgRVywrz7AvwdY
+Margaret Morrison Street,40.441911218586455,-79.93934548933447,roads_api,ChIJ6zHRBR_yNIgRpjWzTp1lBUA
+Margaret Morrison Street,40.441911218586455,-79.93934548933447,roads_api,ChIJ6zHRBR_yNIgRpzWzTp1lBUA
+Hamerschlag Drive,40.443195628791905,-79.94640007304231,roads_api,ChIJp1vJOSHyNIgRGozQFRc6mQs
+Frank Curto Dr,,,directions_api,
+Frew St,,,directions_api,
+Schenley Dr,,,directions_api,
+Beeler St at Forbes Ave,40.44394450000001,-79.9385465,places_api,ChIJm96k1B7yNIgRRVCJIhXYv4A
+Fifth Ave at Morewood Ave,40.4473755,-79.94251249999999,places_api,ChIJPfWtjyLyNIgRlNmxlPmxHLc
+Forbes Ave + Morewood (Carnegie Mellon),40.4444225,-79.94249280000001,places_api,ChIJGZNXHCLyNIgRAwzxmPtpZuA
+"Pittsburgh, PA (Carnegie Mellon area- Bus stop at the intersection of Forbes Ave and Morewood, opposite to Carnegie Mellon University Alumni House)",40.4444414,-79.9424962,places_api,ChIJHUfpHCLyNIgRyChPUeByLXE
+Forbes Ave + Morewood Ave FS (Carnegie Mellon),40.4446976,-79.94378739999999,places_api,ChIJIcaMJiLyNIgRO0e6nBB7RCI
+Morewood Ave at Forbes Ave FS,40.44511299999999,-79.9427,places_api,ChIJH8ltEiLyNIgRxe5bUlpTPj0
+Forbes Ave Opp Beeler St,40.4439661,-79.9394406,places_api,ChIJ-yo5Kh_yNIgRpV4Ben9RfNs
+Forbes Ave + Beeler,40.4438473,-79.93859049999999,places_api,ChIJRQdB1B7yNIgRzNumVcaL354
+Beeler St / Forbes Ave,40.444045,-79.938608,places_api,ChIJtxODLBnyNIgRDdKtaDobVc0
+Beeler St + Forbes FS,40.44401870000001,-79.9383902,places_api,ChIJtxODLBnyNIgRF88EsuWuS6Y
+Forbes + Margaret Morrison NS,40.442789,-79.93777999999999,places_api,ChIJ24cRwh7yNIgRg8WNUIvBoyg
+Forbes Ave + Margaret Morrison,40.442606,-79.937477,places_api,ChIJjfwQwB7yNIgRnsZDTSbHbVc
+Fifth Ave + Moorewood Ave,40.44736499999999,-79.942604,places_api,ChIJcwSZjiLyNIgRUiTkvKrcFL8
+Fifth Ave + Clyde St,40.447201,-79.944955,places_api,ChIJ9bhkpyPyNIgR1izMR7tlfPM
+Forbes Ave at Craig St,40.4442972,-79.94880739999999,places_api,ChIJW58YoibyNIgRxNcf3x9qzsM
+Forbes Ave Opposite Craig St,40.4442901,-79.9488355,places_api,ChIJm5nTmSbyNIgRayloCdJ9nvA
+Fifth Ave at Neville St,40.44710099999999,-79.94735,places_api,ChIJjVMMfyTyNIgRCJ2kzw-_4DY
+Fifth Ave + Neville St,40.447121,-79.947174,places_api,ChIJ0dtvgCPyNIgRZR9zMpW0mjI
+Beeler St + Unger,40.444986,-79.936548,places_api,ChIJ6W2jXRnyNIgRlw_kmePTs14
+Porter Hall,40.4415995,-79.9462885,places_api,ChIJvWG72yDyNIgRXmhHjimM_BU
+Baker Hall,40.4414779,-79.9449887,places_api,ChIJeVSfwyDyNIgRHhnmNj35oBM
+Morewood Gardens,40.4450621,-79.9432088,places_api,ChIJBVTPFCLyNIgR-HhNbKRxhzw
+Carnegie Mellon: Forbes/ Craig Building,40.444764,-79.9485498,places_api,ChIJT_xGoCbyNIgRvpjPrr3zVEk
+Hamburg Hall,40.44432159999999,-79.94564059999999,places_api,ChIJj9mRZiHyNIgRCMrSYggX7ks
+Carnegie Mellon School of Computer Science,40.44416469999999,-79.9433725,places_api,ChIJ747miyHyNIgRIf6b7hXlucM
+Machine Learning Department at Carnegie Mellon University,40.4435743,-79.94461369999999,places_api,ChIJIVACdiHyNIgRRfIg0Yzx51s
+Gesling Stadium,40.4431398,-79.9402817,places_api,ChIJIwSsOB_yNIgRg-sVAGmiz54
+Cathedral of Learning,40.4443625,-79.95315509999999,places_api,ChIJixzjoyjyNIgRpv-H3pCYmcs
+Coulter Welcome Center,40.444748,-79.9456814,places_api,ChIJQZhdjkLzNIgRB1KuDyqQPu0
+Carnegie Mellon University Health Services (CMU UHS),40.4410851,-79.94128049999999,places_api,ChIJ1UH6JCLyNIgRpy0IOxDlo_k
+East Campus Garage,40.4439576,-79.94106599999999,places_api,ChIJqe3mqhjyNIgRtOdqhCWGmFE
+Carnegie Mellon Art Store,40.4433542,-79.94192740000001,places_api,ChIJf1yI-XrzNIgRQQ32FEzm-4Q
+Cyert Hall,40.4443376,-79.9437876,places_api,ChIJtUP4hiHyNIgRZwHv_fgCGjk
+Carnegie Mellon University,40.4476053,-79.9462719,places_api,ChIJK_5IciPyNIgR261YaZN6tfY
+Jared L. Cohon University Center,40.4440968,-79.94208929999999,places_api,ChIJRbkJ5CHyNIgR-41T03tBsxY
+Hunt Library,40.44111710000001,-79.9437361,places_api,ChIJE6qvWiDyNIgRKTGBSeBDy4A
+Scaife Hall,40.441718,-79.94727689999999,places_api,ChIJL5gxLSfyNIgRVoDlHmQNmlo
+Margaret Morrison Carnegie Hall,40.44185299999999,-79.94153179999999,places_api,ChIJY6-Dfh_yNIgR1yEEv2Pk34Q
+Ali Baba Restaurant,40.4450801,-79.9488817,places_api,ChIJbZevISTyNIgRmAk5MgJN5NY
