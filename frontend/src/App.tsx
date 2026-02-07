@@ -67,6 +67,9 @@ export default function App() {
   const [predictionStatus, setPredictionStatus] = useState<PredictionStatus>("idle");
   const [weatherParams, setWeatherParams] = useState<WeatherParams | null>(null);
   const [userLocation, setUserLocation] = useState<[number, number] | null>(null);
+  const [activeRouteSegments, setActiveRouteSegments] = useState<Set<number> | null>(null);
+  const activeRouteSegmentsRef = useRef<Set<number> | null>(null);
+  activeRouteSegmentsRef.current = activeRouteSegments;
   const watchIdRef = useRef<number | null>(null);
   const pendingLocationRef = useRef<{ lng: number; lat: number; accuracy: number } | null>(null);
 
@@ -80,6 +83,38 @@ export default function App() {
     if (modPct > 0.05) return { label: "Low Risk", bg: "bg-yellow-50", text: "text-yellow-700" };
     return { label: "Roads Clear", bg: "bg-green-50", text: "text-green-700" };
   }, [counts]);
+
+  // ── Route segment filter for navigation mode ──
+  const handleRouteSegmentsChange = useCallback((segments: number[] | null) => {
+    setActiveRouteSegments(segments ? new Set(segments) : null);
+    const map = mapRef.current;
+    if (map) {
+      const navActive = segments !== null;
+      // In nav mode: make conditions lines wide & opaque so they fully cover the route line
+      const layers = [LAYER_ID, LAYER_ID + "-tertiary", LAYER_ID + "-minor"];
+      for (const id of layers) {
+        if (!map.getLayer(id)) continue;
+        if (navActive) {
+          map.setPaintProperty(id, "line-width", 8);
+          map.setPaintProperty(id, "line-opacity", 1);
+        } else {
+          // Restore original zoom-dependent widths
+          if (id === LAYER_ID) {
+            map.setPaintProperty(id, "line-width", ["interpolate", ["linear"], ["zoom"], 10, 2, 13, 4.5, 16, 7]);
+            map.setPaintProperty(id, "line-opacity", ["interpolate", ["linear"], ["zoom"], 10, 0.7, 14, 0.9]);
+          } else if (id === LAYER_ID + "-tertiary") {
+            map.setPaintProperty(id, "line-width", ["interpolate", ["linear"], ["zoom"], 13, 2, 16, 4]);
+            map.setPaintProperty(id, "line-opacity", 0.85);
+          } else {
+            map.setPaintProperty(id, "line-width", ["interpolate", ["linear"], ["zoom"], 14, 1.5, 16, 3]);
+            map.setPaintProperty(id, "line-opacity", 0.8);
+          }
+        }
+      }
+      // Refresh map data to apply/remove filter
+      map.fire("moveend");
+    }
+  }, []);
 
   // ── Trigger prediction when snow is detected ──
   const handleSnowDetected = useCallback(async (params: WeatherParams) => {
@@ -342,9 +377,15 @@ export default function App() {
         const bbox = boundsToBbox(map.getBounds());
         const data = await fetchConditions(bbox, kind, dayOffset);
 
+        // When navigating, only show road closure data for route segments
+        const routeFilter = activeRouteSegmentsRef.current;
+        const filteredFeatures = routeFilter
+          ? data.features.filter((f) => routeFilter.has((f as any).id))
+          : data.features;
+
         const mapData = {
           type: "FeatureCollection",
-          features: data.features.map((f) => ({
+          features: filteredFeatures.map((f) => ({
             ...f,
             properties: {
               kind: f.properties.kind,
@@ -361,7 +402,7 @@ export default function App() {
 
         (map.getSource(SOURCE_ID) as maplibregl.GeoJSONSource).setData(mapData as any);
 
-        const nextCounts = data.features.reduce(
+        const nextCounts = filteredFeatures.reduce(
           (acc, f) => {
             const l = f.properties.label;
             if (l === "open") acc.open += 1;
@@ -446,7 +487,7 @@ export default function App() {
         )}
 
         {/* Navigation */}
-        <NavigationPanel mapRef={mapRef} mapPadding={padding} dayOffset={dayOffset} />
+        <NavigationPanel mapRef={mapRef} mapPadding={padding} dayOffset={dayOffset} onRouteSegmentsChange={handleRouteSegmentsChange} />
       </aside>
     </div>
   );

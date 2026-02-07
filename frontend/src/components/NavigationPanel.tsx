@@ -15,9 +15,11 @@ type NavigationPanelProps = {
   mapRef: React.RefObject<maplibregl.Map | null>;
   mapPadding: MapPadding;
   dayOffset?: number;
+  onRouteSegmentsChange?: (segments: number[] | null) => void;
 };
 
-/** Ensure the route source + layers exist on the map. Safe to call repeatedly. */
+/** Ensure the route source + layers exist on the map. Safe to call repeatedly.
+ *  Layers are inserted below the conditions layer so risk colors render on top. */
 function ensureRouteLayers(map: maplibregl.Map) {
   if (!map.getSource(ROUTE_SOURCE)) {
     map.addSource(ROUTE_SOURCE, {
@@ -25,6 +27,8 @@ function ensureRouteLayers(map: maplibregl.Map) {
       data: { type: "FeatureCollection", features: [] }
     });
   }
+  // Insert below "conditions-layer" so risk-colored segments render on top of the route line
+  const before = map.getLayer("conditions-layer") ? "conditions-layer" : undefined;
   if (!map.getLayer(ROUTE_OUTLINE)) {
     map.addLayer({
       id: ROUTE_OUTLINE,
@@ -32,7 +36,7 @@ function ensureRouteLayers(map: maplibregl.Map) {
       source: ROUTE_SOURCE,
       layout: { "line-cap": "round", "line-join": "round" },
       paint: { "line-color": "#1e3a8a", "line-width": 10, "line-opacity": 0.6 }
-    });
+    }, before);
   }
   if (!map.getLayer(ROUTE_LINE)) {
     map.addLayer({
@@ -41,7 +45,7 @@ function ensureRouteLayers(map: maplibregl.Map) {
       source: ROUTE_SOURCE,
       layout: { "line-cap": "round", "line-join": "round" },
       paint: { "line-color": "#3b82f6", "line-width": 6, "line-opacity": 1 }
-    });
+    }, before);
   }
 }
 
@@ -56,7 +60,7 @@ function riskColor(category: string): string {
   }
 }
 
-export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0 }: NavigationPanelProps) {
+export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0, onRouteSegmentsChange }: NavigationPanelProps) {
   const [open, setOpen] = useState(false);
   const [fromText, setFromText] = useState("");
   const [toText, setToText] = useState("");
@@ -270,13 +274,14 @@ export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0 }: N
       setSafeRoute(result);
       const coords = result.geometry.coordinates as [number, number][];
       setRouteData(coords);
+      onRouteSegmentsChange?.(result.segments);
       panToFit([fromCoord, toCoord, ...coords]);
     } catch (e) {
       setRouteError(e instanceof Error ? e.message : "Route failed");
     } finally {
       setRouteLoading(false);
     }
-  }, [fromCoord, toCoord, dayOffset, setRouteData, panToFit]);
+  }, [fromCoord, toCoord, dayOffset, setRouteData, panToFit, onRouteSegmentsChange]);
 
   // Re-route when dayOffset changes while a route is displayed
   useEffect(() => {
@@ -286,6 +291,7 @@ export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0 }: N
       if (cancelled) return;
       setSafeRoute(result);
       setRouteData(result.geometry.coordinates as [number, number][]);
+      onRouteSegmentsChange?.(result.segments);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [dayOffset]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -302,7 +308,8 @@ export default function NavigationPanel({ mapRef, mapPadding, dayOffset = 0 }: N
     startMarkerRef.current = null;
     endMarkerRef.current = null;
     setRouteData([]);
-  }, [setRouteData]);
+    onRouteSegmentsChange?.(null);
+  }, [setRouteData, onRouteSegmentsChange]);
 
   return (
     <div className="mt-4 border-t border-slate-200 pt-4">
