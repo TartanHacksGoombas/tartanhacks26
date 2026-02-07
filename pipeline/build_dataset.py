@@ -20,19 +20,24 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 
-# Input files
-CENTERLINES_CSV = "centerlines_pgh.csv"
-OSM_CSV = "roads_osm_pgh.csv"
-ELEVATION_CSV = "elevation_pgh.csv"
-SLOPES_CSV = "slopes_pgh.csv"
-BRIDGES_CSV = "bridges_pgh.csv"
-LANDSLIDES_CSV = "landslides_pgh.csv"
-CRASHES_CSV = "crashes_winter_pgh.csv"
-SNOW_311_CSV = "311_snow_pgh.csv"
-PLOW_CSV = "plow_activity_pgh.csv"
-PENNDOT_CSV = "penndot_snow_routes_pgh.csv"
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
 
-OUTPUT_CSV = "dataset_prediction_ready.csv"
+# Input files
+CENTERLINES_CSV = os.path.join(DATA_DIR, "centerlines_pgh.csv")
+OSM_CSV = os.path.join(DATA_DIR, "roads_osm_pgh.csv")
+ELEVATION_CSV = os.path.join(DATA_DIR, "elevation_pgh.csv")
+SLOPES_CSV = os.path.join(DATA_DIR, "slopes_pgh.csv")
+BRIDGES_CSV = os.path.join(DATA_DIR, "bridges_pgh.csv")
+LANDSLIDES_CSV = os.path.join(DATA_DIR, "landslides_pgh.csv")
+CRASHES_CSV = os.path.join(DATA_DIR, "crashes_winter_pgh.csv")
+SNOW_311_CSV = os.path.join(DATA_DIR, "311_snow_pgh.csv")
+PLOW_CSV = os.path.join(DATA_DIR, "plow_activity_pgh.csv")
+PENNDOT_CSV = os.path.join(DATA_DIR, "penndot_snow_routes_pgh.csv")
+
+OUTPUT_CSV = os.path.join(DATA_DIR, "dataset_prediction_ready.csv")
 
 # Spatial join threshold in meters
 SPATIAL_THRESHOLD_M = 50

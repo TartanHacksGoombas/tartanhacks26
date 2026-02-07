@@ -15,13 +15,18 @@ import os
 import time
 import requests
 
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 # Pittsburgh coordinates (downtown)
 PGH_LAT = 40.4406
 PGH_LNG = -79.9959
 
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
-OUTPUT_CSV = "weather_historical_pgh.csv"
+OUTPUT_CSV = os.path.join(DATA_DIR, "weather_historical_pgh.csv")
 
 FIELDNAMES = [
     "date", "snowfall_cm", "temp_max_c", "temp_min_c", "wind_max_kmh",

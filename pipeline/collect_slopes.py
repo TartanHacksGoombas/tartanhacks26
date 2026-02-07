@@ -17,12 +17,17 @@ import os
 import time
 import requests
 
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 SLOPE_RESOURCE_ID = "5ce91a56-0799-46ea-9585-13fa8db5979e"
 GEOJSON_URL = "https://data.wprdc.org/dataset/25-or-greater-slope/resource/5ce91a56-0799-46ea-9585-13fa8db5979e/download"
 
-INPUT_CSV = "centerlines_pgh.csv"
-OUTPUT_CSV = "slopes_pgh.csv"
-GEOJSON_CACHE = "slopes_pgh.geojson"
+INPUT_CSV = os.path.join(DATA_DIR, "centerlines_pgh.csv")
+OUTPUT_CSV = os.path.join(DATA_DIR, "slopes_pgh.csv")
+GEOJSON_CACHE = os.path.join(DATA_DIR, "slopes_pgh.geojson")
 
 FIELDNAMES = ["objectid", "mid_lat", "mid_lng", "near_steep_slope", "slope_area_sqm", "data_source"]
 

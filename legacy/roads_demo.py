@@ -16,6 +16,9 @@ import json
 import googlemaps
 from itertools import product
 
+# Resolve paths relative to this script's directory
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "YOUR_API_KEY_HERE")
 
 def get_client():
@@ -250,7 +253,7 @@ def main():
     print("\n" + "=" * 60)
     print("STEP 6: Saving to CSV")
     print("=" * 60)
-    save_to_csv(road_names, direction_roads, nearby_places)
+    save_to_csv(road_names, direction_roads, nearby_places, os.path.join(_SCRIPT_DIR, "roads_around_cmu.csv"))
 
     print("\n" + "=" * 60)
     print("DONE. See above for road data around CMU.")

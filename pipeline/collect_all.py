@@ -15,6 +15,14 @@ import os
 import sys
 import time
 
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Ensure sibling modules are importable
+sys.path.insert(0, _SCRIPT_DIR)
+
 
 def run_script(module_name):
     """Import and run a script's main() function."""
@@ -99,8 +107,9 @@ def main():
     ]
 
     for filename, expected in output_files:
-        if os.path.exists(filename):
-            size = os.path.getsize(filename)
+        filepath = os.path.join(DATA_DIR, filename)
+        if os.path.exists(filepath):
+            size = os.path.getsize(filepath)
             if size > 1_000_000:
                 size_str = f"{size/1_000_000:.1f} MB"
             else:

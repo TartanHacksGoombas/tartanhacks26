@@ -14,8 +14,13 @@ import os
 import time
 import requests
 
-INPUT_CSV = "centerlines_pgh.csv"
-OUTPUT_CSV = "elevation_pgh.csv"
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+INPUT_CSV = os.path.join(DATA_DIR, "centerlines_pgh.csv")
+OUTPUT_CSV = os.path.join(DATA_DIR, "elevation_pgh.csv")
 
 ELEVATION_URL = "https://api.open-elevation.com/api/v1/lookup"
 

@@ -10,7 +10,11 @@ Requires: pip install requests
 
 import csv
 import json
+import os
 import requests
+
+# Resolve paths relative to this script's directory
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # CMU coordinates
 CMU_LAT = 40.4433
@@ -191,10 +195,10 @@ def main():
     print(f"\n{'=' * 60}")
     print("Saving to CSV...")
     print(f"{'=' * 60}")
-    save_to_csv(roads)
+    save_to_csv(roads, os.path.join(_SCRIPT_DIR, "roads_osm_cmu.csv"))
 
     # 5. Also save raw JSON for reference
-    with open("roads_osm_cmu.json", "w", encoding="utf-8") as f:
+    with open(os.path.join(_SCRIPT_DIR, "roads_osm_cmu.json"), "w", encoding="utf-8") as f:
         json.dump(roads, f, indent=2)
     print(f"Saved raw JSON to roads_osm_cmu.json")
 
