@@ -17,7 +17,9 @@ export async function fetchConditions(
   };
 
   const query = new URLSearchParams(params);
-  const response = await fetch(`${API_BASE}/v1/conditions?${query.toString()}`);
+  const response = await fetch(`${API_BASE}/v1/conditions?${query.toString()}`, {
+    cache: "no-store",
+  });
 
   if (!response.ok) {
     const body = await response.text();
@@ -232,6 +234,44 @@ export async function fetchRoute(
       durationSec: s.duration?.value ?? 0
     }))
   };
+}
+
+/* ── Safe Route (risk-weighted Dijkstra via backend) ── */
+
+export type SafeRouteResult = {
+  found: boolean;
+  geometry: { type: "LineString"; coordinates: [number, number][] };
+  distanceM: number;
+  segments: number;
+  riskStats: {
+    avgRisk: number;
+    maxRisk: number;
+    closedSegments: number;
+  };
+  elapsedMs: number;
+};
+
+export async function fetchSafeRoute(
+  from: [number, number],
+  to: [number, number],
+  dayOffset: number
+): Promise<SafeRouteResult> {
+  const res = await fetch(`${API_BASE}/v1/safe-route`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      origin: from, // [lng, lat]
+      destination: to, // [lng, lat]
+      day_offset: dayOffset,
+    }),
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({ error: "Safe route failed" }));
+    throw new Error(data.error ?? `Safe route failed: ${res.status}`);
+  }
+
+  return res.json();
 }
 
 /* ── Weather (NWS API — free, no key) ── */

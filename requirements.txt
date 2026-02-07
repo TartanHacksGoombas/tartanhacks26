@@ -1,7 +1,0 @@
-requests
-pandas
-numpy
-scipy
-lightgbm
-scikit-learn
-pyarrow

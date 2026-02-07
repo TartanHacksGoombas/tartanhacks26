@@ -39,6 +39,12 @@ export type WeatherParams = {
   duration_days: number;
 };
 
+export type RouteRiskFeature = {
+  type: "Feature";
+  geometry: { type: "LineString"; coordinates: [number, number][] };
+  properties: { riskScore: number; riskCategory: string; name: string; label: string };
+};
+
 export type RouteRiskResult = {
   routeRisk: {
     average: number;
@@ -48,4 +54,6 @@ export type RouteRiskResult = {
   matchedSegments: number;
   riskByDay: { day: number; avgRisk: number; category: string }[];
   segments: ConditionFeatureCollection;
+  /** Route polyline split into risk-colored sub-segments (follows the route, not nearby road geometries) */
+  routeSegments?: { type: "FeatureCollection"; features: RouteRiskFeature[] };
 };

@@ -160,26 +160,36 @@ function PrecipGraph({ hours }: { hours: HourlyPeriod[] }) {
 
 /* ── Main Component ── */
 
+type SimulatedWeather = {
+  periods: WeatherPeriod[];
+  hourly: HourlyPeriod[];
+};
+
 type UnifiedDayBarProps = {
   value: number;
   onChange: (dayOffset: number) => void;
   onSnowDetected?: (params: WeatherParams) => void;
+  simulatedWeather?: SimulatedWeather | null;
 };
 
 const UnifiedDayBar = forwardRef<HTMLDivElement, UnifiedDayBarProps>(function UnifiedDayBar(
-  { value, onChange, onSnowDetected },
+  { value, onChange, onSnowDetected, simulatedWeather },
   ref
 ) {
-  const [periods, setPeriods] = useState<WeatherPeriod[]>([]);
-  const [hourly, setHourly] = useState<HourlyPeriod[]>([]);
+  const [livePeriods, setLivePeriods] = useState<WeatherPeriod[]>([]);
+  const [liveHourly, setLiveHourly] = useState<HourlyPeriod[]>([]);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const snowDetectedRef = useRef(false);
 
   // Fetch weather data
   useEffect(() => {
-    fetchWeather().then(setPeriods).catch(() => {});
-    fetchWeatherHourly().then(setHourly).catch(() => {});
+    fetchWeather().then(setLivePeriods).catch(() => {});
+    fetchWeatherHourly().then(setLiveHourly).catch(() => {});
   }, []);
+
+  // Use simulated data when provided, otherwise live data
+  const periods = simulatedWeather?.periods ?? livePeriods;
+  const hourly = simulatedWeather?.hourly ?? liveHourly;
 
   // Auto-detect snow
   useEffect(() => {

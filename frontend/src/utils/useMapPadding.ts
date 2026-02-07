@@ -29,7 +29,7 @@ export function useMapPadding() {
 
     // Left: sidebar covers the full left edge
     const left = sidebar
-      ? sidebar.offsetLeft + sidebar.offsetWidth + BASE_PADDING
+      ? Math.max(BASE_PADDING, Math.round(sidebar.getBoundingClientRect().right + BASE_PADDING))
       : BASE_PADDING;
 
     // Top: top bar covers the top — push content below it
@@ -37,11 +37,11 @@ export function useMapPadding() {
       ? topBar.offsetTop + topBar.offsetHeight + BASE_PADDING
       : BASE_PADDING;
 
-    // Right: the top bar only occupies the top-right *corner*, not the
-    // full right edge. The top padding already pushes content below it, so
-    // we only need a small right margin.  Don't use the top bar width
-    // here — that makes the total horizontal padding exceed the map width.
-    const right = BASE_PADDING;
+    // Right: if the top bar (weather widget) sits on the right, reserve
+    // space for its width so routes don't get obscured.
+    const right = topBar
+      ? Math.max(BASE_PADDING, Math.round(window.innerWidth - topBar.getBoundingClientRect().left + BASE_PADDING))
+      : BASE_PADDING;
 
     setPadding((prev) => {
       if (prev.left === left && prev.top === top && prev.right === right && prev.bottom === BASE_PADDING) return prev;

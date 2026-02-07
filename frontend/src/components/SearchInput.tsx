@@ -20,6 +20,7 @@ export default function SearchInput({ value, onChange, onSelect, placeholder, ha
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const pickingRef = useRef(false); // true while a suggestion click is in progress
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
 
   // Recompute dropdown position whenever the dropdown should be visible
@@ -58,13 +59,18 @@ export default function SearchInput({ value, onChange, onSelect, placeholder, ha
 
   const handlePick = useCallback(
     async (s: GeocodeSuggestion) => {
+      console.log("[SearchInput] handlePick called:", s.displayName);
       setSuggestions([]);
       setLoading(false);
       setResolving(true);
       try {
         const coords = await resolvePlace(s.placeId);
+        console.log("[SearchInput] resolvePlace result:", coords);
         if (coords) {
+          console.log("[SearchInput] calling onSelect with:", coords.lat, coords.lng);
           onSelect({ ...s, lat: coords.lat, lng: coords.lng });
+        } else {
+          console.warn("[SearchInput] resolvePlace returned null!");
         }
       } finally {
         setResolving(false);
@@ -79,12 +85,14 @@ export default function SearchInput({ value, onChange, onSelect, placeholder, ha
   }, []);
 
   const handleBlur = useCallback(() => {
-    // Short delay so clicking a suggestion registers before we hide the dropdown
+    // Short delay so clicking a suggestion registers before we hide the dropdown.
+    // If a pick is in progress (user mousedown'd on a suggestion), don't hide.
     blurTimeoutRef.current = setTimeout(() => {
+      if (pickingRef.current) return;
       setFocused(false);
       setSuggestions([]);
       setLoading(false);
-    }, 200);
+    }, 250);
   }, []);
 
   const showDropdown = focused && !resolving;
@@ -111,8 +119,14 @@ export default function SearchInput({ value, onChange, onSelect, placeholder, ha
           {suggestions.map((s, i) => (
             <li
               key={i}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => handlePick(s)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                pickingRef.current = true;
+              }}
+              onClick={() => {
+                pickingRef.current = false;
+                handlePick(s);
+              }}
               className="cursor-pointer px-3 py-2 text-xs hover:bg-blue-50 truncate"
             >
               {s.displayName}

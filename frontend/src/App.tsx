@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { LngLatBounds } from "maplibre-gl";
-import { fetchConditions, triggerPrediction } from "./utils/api";
+import { fetchConditions, triggerPrediction, WeatherPeriod, HourlyPeriod } from "./utils/api";
 import { ConditionFeatureCollection, SegmentKind, WeatherParams } from "./types";
 import { useMapPadding } from "./utils/useMapPadding";
 import NavigationPanel from "./components/NavigationPanel";
@@ -12,6 +12,97 @@ const LAYER_ID = "conditions-layer";
 const USER_LOC_SOURCE = "user-location-source";
 const USER_LOC_DOT = "user-location-dot";
 const USER_LOC_RING = "user-location-ring";
+
+/* ── TEMP: Generate simulated snowstorm weather ── */
+function buildSimulatedWeather(params: WeatherParams, baseDate?: Date): { periods: WeatherPeriod[]; hourly: HourlyPeriod[] } {
+  const { min_temp_c, max_wind_kmh, duration_days } = params;
+  const minF = Math.round(min_temp_c * 9 / 5 + 32);
+  const periods: WeatherPeriod[] = [];
+  const hourly: HourlyPeriod[] = [];
+  const now = baseDate ? new Date(baseDate) : new Date();
+  now.setHours(0, 0, 0, 0);
+
+  const dayProfiles: { forecast: string; highF: number; lowF: number; precipPct: number; nightForecast: string }[] = [];
+  dayProfiles.push({ forecast: "Cloudy", highF: minF + 18, lowF: minF + 8, precipPct: 10, nightForecast: "Mostly Cloudy" });
+  for (let d = 0; d < duration_days; d++) {
+    const intensity = d === 0 ? "Heavy Snow" : d === duration_days - 1 ? "Snow Showers Likely" : "Snow";
+    const hi = minF + 6 + d * 3;
+    dayProfiles.push({ forecast: intensity, highF: hi, lowF: minF + d * 2, precipPct: 85 - d * 10, nightForecast: d < duration_days - 1 ? "Snow" : "Mostly Cloudy" });
+  }
+  while (dayProfiles.length < 7) {
+    const d = dayProfiles.length;
+    const recovering = d - duration_days - 1;
+    dayProfiles.push({
+      forecast: recovering < 2 ? "Partly Cloudy" : "Mostly Sunny",
+      highF: minF + 20 + recovering * 4,
+      lowF: minF + 10 + recovering * 3,
+      precipPct: Math.max(0, 15 - recovering * 5),
+      nightForecast: "Clear"
+    });
+  }
+
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+  for (let d = 0; d < 7; d++) {
+    const dayDate = new Date(now);
+    dayDate.setDate(dayDate.getDate() + d);
+    const prof = dayProfiles[d];
+    const dayName = d === 0 ? "Today" : d === 1 ? "Tomorrow" : dayNames[dayDate.getDay()];
+
+    const dayStart = new Date(dayDate);
+    dayStart.setHours(6);
+    periods.push({
+      name: dayName,
+      startTime: dayStart.toISOString(),
+      temperature: prof.highF,
+      unit: "F",
+      shortForecast: prof.forecast,
+      isDaytime: true,
+    });
+
+    const nightStart = new Date(dayDate);
+    nightStart.setHours(18);
+    periods.push({
+      name: dayName + " Night",
+      startTime: nightStart.toISOString(),
+      temperature: prof.lowF,
+      unit: "F",
+      shortForecast: prof.nightForecast,
+      isDaytime: false,
+    });
+
+    const isStormDay = d >= 1 && d <= duration_days;
+    for (let h = 0; h < 24; h++) {
+      const hourDate = new Date(dayDate);
+      hourDate.setHours(h);
+      const isDayHour = h >= 6 && h < 20;
+      let precip = 0;
+      let hForecast = prof.forecast;
+      if (isStormDay) {
+        const intensity = Math.sin((h / 24) * Math.PI);
+        precip = Math.min(100, Math.round(prof.precipPct * (0.5 + 0.5 * intensity)));
+        hForecast = precip > 60 ? "Heavy Snow" : precip > 30 ? "Snow" : precip > 10 ? "Snow Showers" : "Cloudy";
+      } else if (d === 0) {
+        precip = h > 18 ? 20 : 5;
+        hForecast = h > 18 ? "Cloudy" : "Mostly Cloudy";
+      }
+      const baseTemp = isDayHour ? prof.highF : prof.lowF;
+      const tempVar = isDayHour ? Math.round(Math.sin(((h - 6) / 14) * Math.PI) * 4) : 0;
+
+      hourly.push({
+        startTime: hourDate.toISOString(),
+        temperature: baseTemp + tempVar,
+        unit: "F",
+        shortForecast: hForecast,
+        windSpeed: `${Math.round(max_wind_kmh * 0.621 * (isStormDay ? 0.7 + 0.3 * Math.random() : 0.3))} mph`,
+        windDirection: "NW",
+        precipChance: precip,
+      });
+    }
+  }
+
+  return { periods, hourly };
+}
 
 type StatusCounts = {
   open: number;
@@ -70,6 +161,19 @@ export default function App() {
   const watchIdRef = useRef<number | null>(null);
   const pendingLocationRef = useRef<{ lng: number; lat: number; accuracy: number } | null>(null);
 
+  // ── TEMP: Simulate snowstorm toggle ──
+  const SIM_PARAMS: WeatherParams = {
+    snowfall_cm: 18,
+    min_temp_c: -12,
+    max_wind_kmh: 40,
+    duration_days: 3,
+  };
+  const STORM_BASE_DATE = new Date(2026, 0, 21);
+
+  const [simMode, setSimMode] = useState<"storm" | "today">("storm");
+  const [simulatedWeather, setSimulatedWeather] = useState<{ periods: WeatherPeriod[]; hourly: HourlyPeriod[] } | null>(null);
+  const simInitRef = useRef(false);
+
   const overallRisk = useMemo(() => {
     const total = counts.open + counts.low_risk + counts.moderate_risk + counts.high_risk + counts.closed;
     if (total === 0) return { label: "No Data", bg: "bg-slate-100", text: "text-slate-600" };
@@ -88,7 +192,6 @@ export default function App() {
     try {
       await triggerPrediction(params);
       setPredictionStatus("ready");
-      // Force map reload to show new predictions
       const map = mapRef.current;
       if (map) map.fire("moveend");
     } catch (e) {
@@ -96,6 +199,24 @@ export default function App() {
       setPredictionStatus("error");
     }
   }, []);
+
+  // Trigger simulation on mount and whenever simMode changes
+  useEffect(() => {
+    if (simMode === "storm") {
+      setDayOffset(0);
+      setSimulatedWeather(buildSimulatedWeather(SIM_PARAMS, STORM_BASE_DATE));
+      if (!simInitRef.current) {
+        simInitRef.current = true;
+        handleSnowDetected(SIM_PARAMS);
+      } else {
+        handleSnowDetected(SIM_PARAMS);
+      }
+    } else {
+      setDayOffset(0);
+      setSimulatedWeather(null);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [simMode]);
 
   // ── Apply location to map (add layers if needed, update source, pan) ──
   const applyLocationToMap = useCallback((map: maplibregl.Map, lng: number, lat: number, accuracy: number, pan: boolean) => {
@@ -145,7 +266,6 @@ export default function App() {
 
     const map = mapRef.current;
     if (!map || !map.isStyleLoaded()) {
-      // Map not ready yet — queue the location to apply once it loads
       pendingLocationRef.current = { lng, lat, accuracy };
       return;
     }
@@ -153,7 +273,6 @@ export default function App() {
     pendingLocationRef.current = null;
     applyLocationToMap(map, lng, lat, accuracy, true);
 
-    // Start continuous watch if not already watching
     if (watchIdRef.current == null && navigator.geolocation) {
       watchIdRef.current = navigator.geolocation.watchPosition(
         (pos) => {
@@ -170,12 +289,12 @@ export default function App() {
     }
   }, [applyLocationToMap]);
 
-  // Request location automatically on mount (pending ref handles map not ready yet)
+  // Request location automatically on mount
   useEffect(() => {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
       (pos) => handleUserLocation(pos.coords.longitude, pos.coords.latitude, pos.coords.accuracy),
-      () => {},  // silently ignore denial on auto-request
+      () => {},
       { enableHighAccuracy: true, timeout: 10000 }
     );
   }, [handleUserLocation]);
@@ -218,14 +337,37 @@ export default function App() {
       map.addSource(SOURCE_ID, { type: "geojson", data: emptyGeoJson });
 
       const conditionColor: maplibregl.ExpressionSpecification = [
-        "interpolate", ["linear"],
-        ["coalesce", ["get", "closureProbability"], 0],
-        0.00, "#16a34a",
-        0.05, "#65a30d",
-        0.15, "#eab308",
-        0.35, "#f97316",
-        0.55, "#dc2626",
-        0.80, "#7f1d1d",
+        "case",
+        ["has", "label"],
+        [
+          "match", ["get", "label"],
+          "open", "#16a34a",
+          "low_risk", "#eab308",
+          "moderate_risk", "#f97316",
+          "high_risk", "#dc2626",
+          "closed", "#7f1d1d",
+          "#94a3b8",
+        ],
+        ["has", "riskCategory"],
+        [
+          "match", ["get", "riskCategory"],
+          "very_low", "#16a34a",
+          "low", "#eab308",
+          "moderate", "#f97316",
+          "high", "#dc2626",
+          "very_high", "#7f1d1d",
+          "#94a3b8",
+        ],
+        [
+          "interpolate", ["linear"],
+          ["coalesce", ["get", "closureProbability"], 0],
+          0.00, "#16a34a",
+          0.05, "#65a30d",
+          0.15, "#eab308",
+          0.35, "#f97316",
+          0.55, "#dc2626",
+          0.80, "#7f1d1d",
+        ],
       ];
 
       // Major roads — always visible
@@ -320,7 +462,6 @@ export default function App() {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
-    // Skip the first render — map starts un-padded and we don't want to animate on load
     if (initialPaddingRef.current) {
       initialPaddingRef.current = false;
       return;
@@ -404,6 +545,7 @@ export default function App() {
           value={dayOffset}
           onChange={setDayOffset}
           onSnowDetected={handleSnowDetected}
+          simulatedWeather={simulatedWeather}
         />
       </div>
 
@@ -424,6 +566,9 @@ export default function App() {
         {/* Overall risk badge */}
         <div className={`mb-3 rounded-xl px-3 py-2.5 text-center ${overallRisk.bg}`}>
           <div className={`text-lg font-bold ${overallRisk.text}`}>{overallRisk.label}</div>
+          <div className="mt-0.5 text-[11px] font-medium text-slate-500">
+            {dayOffset === 0 ? "Today" : `Day +${dayOffset}`} · model forecast
+          </div>
         </div>
 
         {/* Prediction status (loading + error only) */}
@@ -448,6 +593,28 @@ export default function App() {
         {/* Navigation */}
         <NavigationPanel mapRef={mapRef} mapPadding={padding} dayOffset={dayOffset} />
       </aside>
+
+      {/* TEMP: Date toggle — bottom-left */}
+      <div className="absolute bottom-6 left-4 z-20">
+        <button
+          onClick={() => setSimMode(simMode === "storm" ? "today" : "storm")}
+          className={`rounded-xl border px-4 py-2.5 text-xs font-semibold shadow-lg backdrop-blur transition-colors ${
+            simMode === "storm"
+              ? "border-blue-300 bg-blue-50/90 text-blue-800 hover:bg-blue-100/90"
+              : "border-slate-300 bg-white/90 text-slate-700 hover:bg-slate-50/90"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-base">{simMode === "storm" ? "❄️" : "☀️"}</span>
+            <div className="text-left">
+              <div>{simMode === "storm" ? "Storm Mode: Jan 21" : "Live Mode: Today"}</div>
+              <div className="text-[10px] font-normal opacity-70">
+                {simMode === "storm" ? "Simulated snowstorm week" : "Real weather data"}
+              </div>
+            </div>
+          </div>
+        </button>
+      </div>
     </div>
   );
 }

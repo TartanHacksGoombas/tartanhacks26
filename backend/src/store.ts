@@ -117,25 +117,27 @@ export async function loadStore(dataDir: string) {
   console.log(`  Loaded ${count} segments into memory`);
   console.log(`  Spatial grid: ${spatialGrid.size} cells`);
 
-  // Load fallback predictions (day 0)
+  // Load fallback predictions (day inferred from metadata)
   const predictionsPath = path.join(dataDir, "predictions_latest.json");
   if (fs.existsSync(predictionsPath)) {
     console.log(`Loading fallback predictions from ${predictionsPath}...`);
     const predRaw = fs.readFileSync(predictionsPath, "utf-8");
     const predJson = JSON.parse(predRaw);
-    const day0 = new Map<number, Prediction>();
+    const dayOffset =
+      Number(predJson?.metadata?.temporal_features?.day_offset ?? predJson?.metadata?.day_offset ?? 0) || 0;
+    const dayMap = new Map<number, Prediction>();
 
     for (const feature of predJson.features ?? []) {
       const p = feature.properties;
       if (!p?.objectid) continue;
-      day0.set(p.objectid, {
+      dayMap.set(p.objectid, {
         riskScore: p.risk_score ?? 0,
         riskCategory: p.risk_category ?? "very_low",
       });
     }
 
-    predictionCache.set(0, day0);
-    console.log(`  Loaded ${day0.size} fallback predictions for day 0`);
+    predictionCache.set(dayOffset, dayMap);
+    console.log(`  Loaded ${dayMap.size} fallback predictions for day ${dayOffset}`);
   }
 
   loaded = true;
@@ -194,6 +196,10 @@ export function getSegmentCount(): number {
 
 export function getPredictionCount(dayOffset: number): number {
   return predictionCache.get(dayOffset)?.size ?? 0;
+}
+
+export function getAllSegments(): StoredSegment[] {
+  return Array.from(segments.values());
 }
 
 /** Haversine distance in meters. */

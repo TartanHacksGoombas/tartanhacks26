@@ -40,9 +40,10 @@ mapsProxyRouter.get("/autocomplete", async (req, res) => {
       new URLSearchParams({
         input,
         key: GMAPS_KEY,
-        // Bias results toward Pittsburgh
+        // Strictly limit results to the Pittsburgh metro area
         location: "40.4406,-79.9959",
-        radius: "30000",
+        radius: "25000",
+        strictbounds: "true",
         components: "country:us"
       });
 

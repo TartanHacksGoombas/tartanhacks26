@@ -6,6 +6,7 @@ import { conditionsRouter } from "./routes/conditions";
 import { predictRouter } from "./routes/predict";
 import { routeRiskRouter } from "./routes/route-risk";
 import { mapsProxyRouter } from "./routes/maps-proxy";
+import { safeRouteRouter } from "./routes/safe-route";
 
 const app = express();
 
@@ -19,6 +20,7 @@ app.get("/healthz", (_req, res) => {
 app.use("/v1", conditionsRouter);
 app.use("/v1", predictRouter);
 app.use("/v1", routeRiskRouter);
+app.use("/v1", safeRouteRouter);
 app.use("/v1/maps", mapsProxyRouter);
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

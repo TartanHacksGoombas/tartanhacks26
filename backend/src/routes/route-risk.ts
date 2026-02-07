@@ -21,7 +21,7 @@ routeRiskRouter.post("/route-risk", async (req, res) => {
     const matched = new Map<number, { riskScore: number; riskCategory: string; name: string; geometry: any }>();
 
     for (const [lng, lat] of sampledCoords) {
-      const nearest = getNearestSegments(lng, lat, 50);
+      const nearest = getNearestSegments(lng, lat, 30);
       if (nearest.length === 0) continue;
 
       const seg = nearest[0].seg;
@@ -55,6 +55,74 @@ routeRiskRouter.post("/route-risk", async (req, res) => {
       }
     }
 
+    // ── Build route-polyline risk segments ──
+    // For each consecutive pair of route coordinates, find the nearest matched
+    // road segment and assign its risk. This allows the frontend to color the
+    // actual route polyline rather than drawing nearby road geometries.
+    const routeRiskSegments: {
+      type: "Feature";
+      geometry: { type: "LineString"; coordinates: [number, number][] };
+      properties: { riskScore: number; riskCategory: string; name: string; label: string };
+    }[] = [];
+
+    if (coordinates.length >= 2) {
+      const matchedArr = Array.from(matched.entries());
+
+      // Helper: find closest matched segment to a coordinate
+      const closestMatch = (lng: number, lat: number) => {
+        let best: typeof matchedArr[0] | null = null;
+        let bestDist = Infinity;
+        for (const entry of matchedArr) {
+          const geom = entry[1].geometry;
+          for (const [sLng, sLat] of geom.coordinates) {
+            const d = haversineM(lat, lng, sLat, sLng);
+            if (d < bestDist) { bestDist = d; best = entry; }
+          }
+        }
+        return best ? best[1] : null;
+      };
+
+      // Walk through route coordinates and group consecutive segments
+      // that share the same matched road into one LineString feature
+      let currentMatch: typeof segments[0] | null = null;
+      let currentCoords: [number, number][] = [];
+
+      const flush = () => {
+        if (currentCoords.length >= 2 && currentMatch) {
+          routeRiskSegments.push({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: [...currentCoords] },
+            properties: {
+              riskScore: currentMatch.riskScore,
+              riskCategory: currentMatch.riskCategory,
+              name: currentMatch.name,
+              label: riskCatToLabel(currentMatch.riskCategory),
+            },
+          });
+        }
+      };
+
+      for (let i = 0; i < coordinates.length; i++) {
+        const [lng, lat] = coordinates[i];
+        const match = closestMatch(lng, lat);
+        const fallback = { riskScore: 0, riskCategory: "very_low", name: "", geometry: { coordinates: [] } };
+        const resolved = match ?? fallback;
+
+        if (currentMatch && resolved.riskCategory === currentMatch.riskCategory) {
+          currentCoords.push(coordinates[i]);
+        } else {
+          // Overlap: push the current coord to both the old and new segment
+          if (currentCoords.length > 0) {
+            currentCoords.push(coordinates[i]);
+            flush();
+          }
+          currentMatch = resolved;
+          currentCoords = [coordinates[i]];
+        }
+      }
+      flush();
+    }
+
     return res.json({
       routeRisk: {
         average: Math.round(avgRisk * 1000) / 1000,
@@ -76,6 +144,11 @@ routeRiskRouter.post("/route-risk", async (req, res) => {
             label: riskCatToLabel(s.riskCategory),
           },
         })),
+      },
+      // Route polyline split into risk-colored sub-segments
+      routeSegments: {
+        type: "FeatureCollection",
+        features: routeRiskSegments,
       },
     });
   } catch (error) {

@@ -16,14 +16,18 @@ backend/node_modules
 backend/dist
 
 # Pipeline data (large, generated)
-data/
-!data/centerlines_pgh.geojson
-!data/dataset_prediction_ready.csv
-!data/predictions_latest.json
-!data/model_lgbm.txt
-!data/model_metadata.json
-!data/ranker_lgbm.txt
-!data/ranker_metadata.json
-!data/feature_importance.csv
-!data/ranker_feature_importance.csv
-!data/model_report.json
+backend/data/
+!backend/data/centerlines_pgh.geojson
+!backend/data/dataset_prediction_ready.csv
+!backend/data/predictions_latest.json
+!backend/data/model_lgbm.txt
+!backend/data/model_metadata.json
+!backend/data/ranker_lgbm.txt
+!backend/data/ranker_metadata.json
+!backend/data/feature_importance.csv
+!backend/data/ranker_feature_importance.csv
+!backend/data/model_report.json
+
+# Python
+__pycache__/
+*.pyc
