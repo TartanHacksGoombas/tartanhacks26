@@ -6,6 +6,7 @@ Phase B (needs Phase A): collect_elevation.py, collect_slopes.py, collect_bridge
 Phase C (independent):   collect_weather_historical.py, collect_weather_realtime.py, collect_penndot_winter.py
 Phase D (independent):   collect_crashes.py, collect_311_snow.py, collect_plow_activity.py, collect_penndot_snow_routes.py
 Phase E (needs all):     build_dataset.py
+Phase F (ML pipeline):   build_labels.py → build_training_data.py → train_model.py → predict.py
 
 Usage: python collect_all.py
 """
@@ -78,6 +79,13 @@ def main():
     print("\n>>> PHASE E: Master Join")
     results["build_dataset"] = run_script("build_dataset")
 
+    # Phase F — ML Pipeline (labels → features → train → predict)
+    print("\n>>> PHASE F: ML Pipeline")
+    results["build_labels"] = run_script("build_labels")
+    results["build_training_data"] = run_script("build_training_data")
+    results["train_model"] = run_script("train_model")
+    results["predict"] = run_script("predict")
+
     # Summary
     elapsed_total = time.time() - start_total
     print(f"\n{'='*60}")
@@ -111,6 +119,14 @@ def main():
         ("511pa_events_pgh.csv", "511PA traffic events"),
         ("penndot_press_closures_pgh.csv", "press release closures"),
         ("dataset_prediction_ready.csv", "~19,000 rows, ~30 cols"),
+        ("storm_events.csv", "~126 storm events"),
+        ("storm_labels.csv", "~2-3M segment-storm labels"),
+        ("training_matrix.parquet", "~2.8M rows, ~28 features"),
+        ("model_lgbm.txt", "LightGBM model"),
+        ("model_metadata.json", "model hyperparams + metrics"),
+        ("feature_importance.csv", "feature importance rankings"),
+        ("predictions_latest.csv", "~19,000 risk predictions"),
+        ("predictions_latest.json", "GeoJSON predictions"),
     ]
 
     for filename, expected in output_files:
