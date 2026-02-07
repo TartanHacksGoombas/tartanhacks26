@@ -15,10 +15,15 @@ import os
 import time
 import requests
 
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 # PennDOT State Roads ArcGIS REST endpoint
 BASE_URL = "https://gis.penndot.pa.gov/arcgis/rest/services/opendata/roadwaysegments/MapServer/0/query"
 
-OUTPUT_CSV = "penndot_snow_routes_pgh.csv"
+OUTPUT_CSV = os.path.join(DATA_DIR, "penndot_snow_routes_pgh.csv")
 
 FIELDNAMES = [
     "route_no", "street_name", "lane_count", "aadt",

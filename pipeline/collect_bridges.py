@@ -14,10 +14,15 @@ import os
 import time
 import requests
 
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 RESOURCE_ID = "23f675e5-f745-49c1-8fa0-c5bc35c25184"
 CKAN_BASE = "https://data.wprdc.org/api/3/action"
 
-OUTPUT_CSV = "bridges_pgh.csv"
+OUTPUT_CSV = os.path.join(DATA_DIR, "bridges_pgh.csv")
 
 FIELDNAMES = [
     "bridge_id", "name", "neighborhood", "latitude", "longitude",

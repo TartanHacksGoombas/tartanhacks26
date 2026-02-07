@@ -15,6 +15,11 @@ import os
 import time
 import requests
 
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 # PennDOT Winter Conditions ArcGIS service layers
 BASE_URL = "https://gis.penndot.pa.gov/arcgis/rest/services/winterconditions/winterconditions/MapServer"
 
@@ -29,7 +34,7 @@ LAYERS = {
 # Allegheny County bounding box (approximate)
 BBOX = "-80.10,40.36,-79.86,40.50"
 
-OUTPUT_CSV = "penndot_conditions_pgh.csv"
+OUTPUT_CSV = os.path.join(DATA_DIR, "penndot_conditions_pgh.csv")
 
 FIELDNAMES = [
     "condition_type", "route", "segment_desc", "county",

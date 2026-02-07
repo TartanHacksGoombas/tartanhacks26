@@ -16,13 +16,18 @@ import os
 import time
 import requests
 
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 # Pittsburgh bounding box (south, west, north, east)
 PGH_BBOX = (40.36, -80.10, 40.50, -79.86)
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
-OUTPUT_CSV = "roads_osm_pgh.csv"
-OUTPUT_JSON = "roads_osm_pgh.json"
+OUTPUT_CSV = os.path.join(DATA_DIR, "roads_osm_pgh.csv")
+OUTPUT_JSON = os.path.join(DATA_DIR, "roads_osm_pgh.json")
 
 FIELDNAMES = [
     "osm_id", "name", "highway_type", "surface", "lanes", "maxspeed",

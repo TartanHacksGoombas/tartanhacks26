@@ -6,17 +6,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Snow Road Closure Prediction App for Pittsburgh. Predicts which roads will close during snowstorms and plans routes around them. Built for TartanHacks 2026.
 
+## Directory Structure
+
+```
+tartanhacks26/
+├── pipeline/        # Pittsburgh-wide data collection (18 scripts + orchestrator + join)
+├── legacy/          # CMU-scoped demo scripts (800m radius) + their data
+├── data/            # Generated pipeline output CSVs/JSONs (gitignored)
+├── requirements.txt
+└── CLAUDE.md
+```
+
 ## Architecture
 
-### Legacy CMU-Scoped Scripts (800m radius)
+### Legacy CMU-Scoped Scripts (`legacy/`)
 
 - **roads_osm.py** — OSM road data around CMU. Outputs `roads_osm_cmu.csv`.
 - **roads_demo.py** — Google Maps road data around CMU. Requires `GOOGLE_MAPS_API_KEY`. Outputs `roads_around_cmu.csv`.
 - **roads_analysis.py** — Joins OSM + Google CSVs. Outputs `roads_joined_cmu.csv`.
 
-### Pittsburgh-Wide Data Collection Pipeline (14 scripts)
+### Pittsburgh-Wide Data Collection Pipeline (`pipeline/`)
 
-All scripts are standalone and output CSVs with a `data_source` column.
+All scripts are standalone and output CSVs to `data/` with a `data_source` column.
 
 **Phase A — Road Network Foundation:**
 - **collect_centerlines.py** — WPRDC Street Centerlines (~18,665 segments). Base road network. GeoJSON resource `8a38a51d` under dataset `9ebd073b`.
@@ -38,9 +49,13 @@ All scripts are standalone and output CSVs with a `data_source` column.
 - **collect_311_snow.py** — WPRDC 311 data (resource `29462525`), filtered by `request_type_name` LIKE Snow/Ice (~39,080 records). Column names are lowercase in new format.
 - **collect_plow_activity.py** — WPRDC plow GPS traces 2018-2020 (dataset `d0b56030`, ~722k records from 5 events).
 - **collect_penndot_snow_routes.py** — PennDOT roadway segments for Allegheny County (~5,332 segments). Service URL: `opendata/roadwaysegments/MapServer`. Fields: `OVERALL_PVMNT_IDX`, `ROUGH_INDX`.
+- **collect_domi_closures.py** — WPRDC DOMI street closure permits (~63k records). Resource `a9a1d93a`. Includes full/lane/parking/sidewalk closure flags.
+- **collect_snow_emergency_routes.py** — Derived snow priority routes from centerlines DOMI classification (~3,683 segments). Arterial + Collector roads = snow plowing priority.
+- **collect_511pa_events.py** — 511PA traffic events for Allegheny County (real-time snapshot, append mode). CSV export from 511pa.com.
+- **collect_penndot_press.py** — PennDOT District 11 press releases parsed for road closure details. Regex-based text extraction.
 
 **Phase E — Master Join:**
-- **build_dataset.py** — Joins all CSVs into `dataset_prediction_ready.csv` (~28,805 rows, 24 columns). Uses scipy KDTree for spatial joins. Coerces lat/lng to numeric before spatial operations.
+- **build_dataset.py** — Joins all CSVs into `data/dataset_prediction_ready.csv` (~28,805 rows, 27 columns). Uses scipy KDTree for spatial joins. Coerces lat/lng to numeric before spatial operations. Adds `is_snow_emergency_route`, `domi_closure_count`, `domi_full_closure_count`.
 
 **Orchestrator:**
 - **collect_all.py** — Runs all scripts in dependency order.
@@ -49,15 +64,15 @@ All scripts are standalone and output CSVs with a `data_source` column.
 
 ```bash
 pip install -r requirements.txt
-python collect_all.py
+python pipeline/collect_all.py
 ```
 
 Or run individual scripts:
 ```bash
-python collect_centerlines.py   # Run first — base road network
-python collect_osm_pgh.py       # Run first — OSM data
-python collect_elevation.py     # Needs centerlines_pgh.csv
-python build_dataset.py         # Needs all CSVs
+python pipeline/collect_centerlines.py   # Run first — base road network
+python pipeline/collect_osm_pgh.py       # Run first — OSM data
+python pipeline/collect_elevation.py     # Needs data/centerlines_pgh.csv
+python pipeline/build_dataset.py         # Needs all CSVs in data/
 ```
 
 ## Dependencies
@@ -66,7 +81,7 @@ python build_dataset.py         # Needs all CSVs
 requirements.txt: requests, pandas, numpy, scipy
 ```
 
-`googlemaps` is only needed for the legacy `roads_demo.py` script.
+`googlemaps` is only needed for the legacy `legacy/roads_demo.py` script.
 
 ## External API Notes
 
@@ -79,11 +94,12 @@ WPRDC resource IDs and PennDOT ArcGIS service URLs change over time. If a script
 ## Conventions
 
 - Each script is standalone with its own `main()` function
+- All pipeline scripts resolve paths via `DATA_DIR` relative to the project root
 - CSV output with `csv.DictWriter`, JSON with 2-space indent
 - `data_source` column in every output CSV
 - Coordinates as `mid_lat`, `mid_lng`
-- Cache: skip re-fetch if output CSV already exists
+- Cache: skip re-fetch if output CSV already exists in `data/`
 - Progress: `"Fetching batch 15/190..."`
 - Retry on HTTP 429/5xx with exponential backoff
 - Stream large downloads with `requests.get(url, stream=True)`
-- Generated `*_pgh.csv`, `*.geojson` files are in `.gitignore`
+- Generated data files go in `data/` (gitignored)

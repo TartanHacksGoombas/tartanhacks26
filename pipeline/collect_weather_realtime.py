@@ -15,11 +15,16 @@ import os
 import time
 import requests
 
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 FORECAST_URL = "https://api.weather.gov/gridpoints/PBZ/78,66/forecast"
 ALERTS_URL = "https://api.weather.gov/alerts/active"
 
-FORECAST_OUTPUT = "weather_forecast_pgh.json"
-ALERTS_OUTPUT = "weather_alerts_pgh.json"
+FORECAST_OUTPUT = os.path.join(DATA_DIR, "weather_forecast_pgh.json")
+ALERTS_OUTPUT = os.path.join(DATA_DIR, "weather_alerts_pgh.json")
 
 HEADERS = {
     "User-Agent": "(SnowRoadClosurePrediction, tartanhacks2026@example.com)",

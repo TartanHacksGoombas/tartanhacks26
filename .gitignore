@@ -1,27 +1,11 @@
 # Generated data files (large, re-fetchable)
-*.geojson
-centerlines_pgh.csv
-roads_osm_pgh.csv
-roads_osm_pgh.json
-elevation_pgh.csv
-slopes_pgh.csv
-bridges_pgh.csv
-landslides_pgh.csv
-weather_historical_pgh.csv
-weather_forecast_pgh.json
-weather_alerts_pgh.json
-penndot_conditions_pgh.csv
-crashes_winter_pgh.csv
-311_snow_pgh.csv
-plow_activity_pgh.csv
-penndot_snow_routes_pgh.csv
-dataset_prediction_ready.csv
+data/
 
-# Existing CMU-scoped outputs
-roads_osm_cmu.csv
-roads_osm_cmu.json
-roads_around_cmu.csv
-roads_joined_cmu.csv
+# Legacy CMU-scoped outputs
+legacy/roads_osm_cmu.csv
+legacy/roads_osm_cmu.json
+legacy/roads_around_cmu.csv
+legacy/roads_joined_cmu.csv
 
 # Python
 __pycache__/

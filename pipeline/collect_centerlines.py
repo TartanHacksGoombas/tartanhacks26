@@ -18,12 +18,17 @@ import os
 import time
 import requests
 
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
 RESOURCE_ID = "dd13c2e7-4a83-40aa-a040-08a27385759b"
 CKAN_BASE = "https://data.wprdc.org/api/3/action"
 GEOJSON_URL = "https://data.wprdc.org/dataset/9ebd073b-f637-4f33-a7c2-619d23dd085a/resource/8a38a51d-5000-4600-8114-3f9e92202a64/download/pgh_centerlines.geojson"
 
-OUTPUT_CSV = "centerlines_pgh.csv"
-GEOJSON_CACHE = "centerlines_pgh.geojson"
+OUTPUT_CSV = os.path.join(DATA_DIR, "centerlines_pgh.csv")
+GEOJSON_CACHE = os.path.join(DATA_DIR, "centerlines_pgh.geojson")
 
 FIELDNAMES = [
     "objectid", "streetname", "domi_class", "paveclass", "speedlimit",

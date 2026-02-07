@@ -20,19 +20,26 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import KDTree
 
-# Input files
-CENTERLINES_CSV = "centerlines_pgh.csv"
-OSM_CSV = "roads_osm_pgh.csv"
-ELEVATION_CSV = "elevation_pgh.csv"
-SLOPES_CSV = "slopes_pgh.csv"
-BRIDGES_CSV = "bridges_pgh.csv"
-LANDSLIDES_CSV = "landslides_pgh.csv"
-CRASHES_CSV = "crashes_winter_pgh.csv"
-SNOW_311_CSV = "311_snow_pgh.csv"
-PLOW_CSV = "plow_activity_pgh.csv"
-PENNDOT_CSV = "penndot_snow_routes_pgh.csv"
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
 
-OUTPUT_CSV = "dataset_prediction_ready.csv"
+# Input files
+CENTERLINES_CSV = os.path.join(DATA_DIR, "centerlines_pgh.csv")
+OSM_CSV = os.path.join(DATA_DIR, "roads_osm_pgh.csv")
+ELEVATION_CSV = os.path.join(DATA_DIR, "elevation_pgh.csv")
+SLOPES_CSV = os.path.join(DATA_DIR, "slopes_pgh.csv")
+BRIDGES_CSV = os.path.join(DATA_DIR, "bridges_pgh.csv")
+LANDSLIDES_CSV = os.path.join(DATA_DIR, "landslides_pgh.csv")
+CRASHES_CSV = os.path.join(DATA_DIR, "crashes_winter_pgh.csv")
+SNOW_311_CSV = os.path.join(DATA_DIR, "311_snow_pgh.csv")
+PLOW_CSV = os.path.join(DATA_DIR, "plow_activity_pgh.csv")
+PENNDOT_CSV = os.path.join(DATA_DIR, "penndot_snow_routes_pgh.csv")
+DOMI_CSV = os.path.join(DATA_DIR, "domi_closures_pgh.csv")
+SNOW_ROUTES_CSV = os.path.join(DATA_DIR, "snow_emergency_routes_pgh.csv")
+
+OUTPUT_CSV = os.path.join(DATA_DIR, "dataset_prediction_ready.csv")
 
 # Spatial join threshold in meters
 SPATIAL_THRESHOLD_M = 50
@@ -254,6 +261,8 @@ def main():
     snow_311 = load_csv(SNOW_311_CSV, "311 Snow")
     plow = load_csv(PLOW_CSV, "Plow Activity")
     penndot = load_csv(PENNDOT_CSV, "PennDOT Routes")
+    domi = load_csv(DOMI_CSV, "DOMI Closures")
+    snow_routes = load_csv(SNOW_ROUTES_CSV, "Snow Emergency Routes")
 
     # Ensure mid_lat/mid_lng are numeric
     for col in ["mid_lat", "mid_lng"]:
@@ -371,6 +380,43 @@ def main():
     # --- Join PennDOT routes ---
     df = join_penndot(df, penndot)
 
+    # --- Spatial count: DOMI closures ---
+    print("  Counting DOMI closures per segment (spatial, 200m radius)...")
+    df["domi_closure_count"] = spatial_count(
+        df, domi, target_lat="latitude", target_lng="longitude",
+        threshold_m=200,
+    )
+    print(f"    Total DOMI closure associations: {df['domi_closure_count'].sum()}")
+
+    # DOMI full closures only
+    if not domi.empty:
+        full_col = None
+        for col_name in ["full_closure"]:
+            if col_name in domi.columns:
+                full_col = col_name
+                break
+        if full_col:
+            domi_full = domi[domi[full_col].astype(str).str.lower().isin(["true", "1", "yes"])]
+            print(f"  Counting DOMI full closures per segment (spatial, 200m radius)...")
+            df["domi_full_closure_count"] = spatial_count(
+                df, domi_full, target_lat="latitude", target_lng="longitude",
+                threshold_m=200,
+            )
+            print(f"    Total DOMI full closure associations: {df['domi_full_closure_count'].sum()}")
+        else:
+            df["domi_full_closure_count"] = 0
+    else:
+        df["domi_full_closure_count"] = 0
+
+    # --- Flag snow emergency routes ---
+    print("  Flagging snow emergency route segments (spatial, 50m radius)...")
+    df["is_snow_emergency_route"] = spatial_nearest_flag(
+        df, snow_routes, target_lat="mid_lat", target_lng="mid_lng",
+        threshold_m=50,
+    )
+    snow_route_segs = df["is_snow_emergency_route"].sum()
+    print(f"    {snow_route_segs} segments on snow emergency routes")
+
     # --- Select and order final columns ---
     final_columns = [
         # Road attributes
@@ -386,6 +432,8 @@ def main():
         # Historical risk
         "winter_crash_count", "winter_crash_fatal", "snow_complaint_count",
         "plow_coverage_score",
+        # Closure data
+        "is_snow_emergency_route", "domi_closure_count", "domi_full_closure_count",
     ]
 
     # Only include columns that exist

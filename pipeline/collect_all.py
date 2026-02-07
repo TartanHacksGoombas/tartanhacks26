@@ -15,6 +15,14 @@ import os
 import sys
 import time
 
+# Resolve paths relative to project root
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Ensure sibling modules are importable
+sys.path.insert(0, _SCRIPT_DIR)
+
 
 def run_script(module_name):
     """Import and run a script's main() function."""
@@ -50,7 +58,8 @@ def main():
 
     # Phase B — Environmental Risk Factors (sequential, needs Phase A)
     print("\n>>> PHASE B: Environmental Risk Factors")
-    for script in ["collect_elevation", "collect_slopes", "collect_bridges", "collect_landslides"]:
+    for script in ["collect_elevation", "collect_slopes", "collect_bridges", "collect_landslides",
+                    "collect_snow_emergency_routes"]:
         results[script] = run_script(script)
 
     # Phase C — Weather Data
@@ -60,7 +69,9 @@ def main():
 
     # Phase D — Historical Incident Data
     print("\n>>> PHASE D: Historical Incident Data")
-    for script in ["collect_crashes", "collect_311_snow", "collect_plow_activity", "collect_penndot_snow_routes"]:
+    for script in ["collect_crashes", "collect_311_snow", "collect_plow_activity", "collect_penndot_snow_routes",
+                    "collect_domi_closures",
+                    "collect_511pa_events", "collect_penndot_press"]:
         results[script] = run_script(script)
 
     # Phase E — Master Join
@@ -95,12 +106,17 @@ def main():
         ("311_snow_pgh.csv", "311 snow complaints"),
         ("plow_activity_pgh.csv", "plow GPS traces"),
         ("penndot_snow_routes_pgh.csv", "PennDOT routes"),
+        ("domi_closures_pgh.csv", "~63,000 permitted closures"),
+        ("snow_emergency_routes_pgh.csv", "~286 route segments"),
+        ("511pa_events_pgh.csv", "511PA traffic events"),
+        ("penndot_press_closures_pgh.csv", "press release closures"),
         ("dataset_prediction_ready.csv", "~19,000 rows, ~30 cols"),
     ]
 
     for filename, expected in output_files:
-        if os.path.exists(filename):
-            size = os.path.getsize(filename)
+        filepath = os.path.join(DATA_DIR, filename)
+        if os.path.exists(filepath):
+            size = os.path.getsize(filepath)
             if size > 1_000_000:
                 size_str = f"{size/1_000_000:.1f} MB"
             else:

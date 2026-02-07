@@ -1,10 +1,14 @@
 """Load and join OSM + Google Maps road CSVs into a single DataFrame."""
 
+import os
 import pandas as pd
 
+# Resolve paths relative to this script's directory
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Load both CSVs
-df_osm = pd.read_csv("roads_osm_cmu.csv")
-df_google = pd.read_csv("roads_around_cmu.csv")
+df_osm = pd.read_csv(os.path.join(_SCRIPT_DIR, "roads_osm_cmu.csv"))
+df_google = pd.read_csv(os.path.join(_SCRIPT_DIR, "roads_around_cmu.csv"))
 
 print(f"OSM data:    {len(df_osm)} rows")
 print(f"Google data: {len(df_google)} rows")
@@ -99,5 +103,5 @@ for col in ["highway_type", "surface", "lanes", "maxspeed", "oneway"]:
     print(df_final[col].value_counts(dropna=False))
 
 # Save
-df_final.to_csv("roads_joined_cmu.csv", index=False)
+df_final.to_csv(os.path.join(_SCRIPT_DIR, "roads_joined_cmu.csv"), index=False)
 print(f"\nSaved {len(df_final)} rows to roads_joined_cmu.csv")
