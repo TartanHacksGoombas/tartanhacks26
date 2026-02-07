@@ -3,10 +3,8 @@ import maplibregl, { LngLatBounds } from "maplibre-gl";
 import { fetchConditions, triggerPrediction } from "./utils/api";
 import { ConditionFeatureCollection, SegmentKind, WeatherParams } from "./types";
 import { useMapPadding } from "./utils/useMapPadding";
-import StatusCard from "./components/StatusCard";
 import NavigationPanel from "./components/NavigationPanel";
-import WeatherBar from "./components/WeatherBar";
-import TimeSlider from "./components/TimeSlider";
+import UnifiedDayBar from "./components/UnifiedDayBar";
 import LocationButton from "./components/LocationButton";
 
 const SOURCE_ID = "conditions-source";
@@ -58,14 +56,13 @@ function boundsToBbox(bounds: LngLatBounds): [number, number, number, number] {
 export default function App() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const { sidebarRef, weatherRef, padding } = useMapPadding();
+  const { sidebarRef, topBarRef, padding } = useMapPadding();
   const [kind] = useState<SegmentKind>("road");
   const [dayOffset, setDayOffset] = useState(0);
   // previewDay updates live during drag (for weather bar); dayOffset commits on release (for data reload)
   const [previewDay, setPreviewDay] = useState(0);
   const [mapReady, setMapReady] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [counts, setCounts] = useState<StatusCounts>({ open: 0, low_risk: 0, moderate_risk: 0, closed: 0 });
   const [error, setError] = useState<string | null>(null);
   const [predictionStatus, setPredictionStatus] = useState<PredictionStatus>("idle");
@@ -74,10 +71,16 @@ export default function App() {
   const watchIdRef = useRef<number | null>(null);
   const pendingLocationRef = useRef<{ lng: number; lat: number; accuracy: number } | null>(null);
 
-  const totalVisible = useMemo(
-    () => counts.open + counts.low_risk + counts.moderate_risk + counts.closed,
-    [counts]
-  );
+  const overallRisk = useMemo(() => {
+    const total = counts.open + counts.low_risk + counts.moderate_risk + counts.closed;
+    if (total === 0) return { label: "No Data", bg: "bg-slate-100", text: "text-slate-600" };
+    const highPct = counts.closed / total;
+    const modPct = counts.moderate_risk / total;
+    if (highPct > 0.15) return { label: "High Risk", bg: "bg-red-50", text: "text-red-700" };
+    if (highPct > 0.05 || modPct > 0.20) return { label: "Moderate Risk", bg: "bg-orange-50", text: "text-orange-700" };
+    if (modPct > 0.05) return { label: "Low Risk", bg: "bg-yellow-50", text: "text-yellow-700" };
+    return { label: "Roads Clear", bg: "bg-green-50", text: "text-green-700" };
+  }, [counts]);
 
   // ── Trigger prediction when snow is detected ──
   const handleSnowDetected = useCallback(async (params: WeatherParams) => {
@@ -356,7 +359,6 @@ export default function App() {
           { open: 0, low_risk: 0, moderate_risk: 0, closed: 0 } as StatusCounts
         );
         setCounts(nextCounts);
-        setLastUpdated(new Date().toISOString());
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : "Failed to load map data");
       } finally {
@@ -380,20 +382,20 @@ export default function App() {
         style={{ width: "100%", height: "100%", minHeight: "100vh" }}
       />
 
-      <WeatherBar ref={weatherRef} activeDayOffset={dayOffset} onSnowDetected={handleSnowDetected} />
+      {/* Unified top bar */}
+      <div className="absolute top-4 z-20" style={{ left: "calc(320px + 2rem + 1rem)", right: "1rem" }}>
+        <UnifiedDayBar
+          ref={topBarRef}
+          value={dayOffset}
+          onChange={(d) => { setDayOffset(d); setPreviewDay(d); }}
+          onPreview={setPreviewDay}
+          onSnowDetected={handleSnowDetected}
+        />
+      </div>
 
       {/* Location button — above MapLibre nav controls */}
       <div className="absolute z-10" style={{ bottom: 120, right: 10 }}>
         <LocationButton onLocation={handleUserLocation} />
-      </div>
-
-      {/* Time slider */}
-      <div className="absolute top-4 z-20" style={{ left: "calc(320px + 2rem + 1rem)", right: "calc(500px + 2rem + 1rem)" }}>
-        <TimeSlider
-          value={dayOffset}
-          onChange={(d) => { setDayOffset(d); setPreviewDay(d); }}
-          onPreview={setPreviewDay}
-        />
       </div>
 
       <aside ref={sidebarRef} className="absolute left-4 top-4 z-10 w-[320px] max-h-[90vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-xl backdrop-blur">
@@ -401,53 +403,34 @@ export default function App() {
         <div className="mb-3">
           <h1 className="text-xl font-bold tracking-tight text-slate-900">Snow Route Pittsburgh</h1>
           <p className="text-sm text-slate-600">
-            ML-powered road closure risk predictions. Green = safe, red = high risk.
+            ML-powered road closure risk predictions.
           </p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-            <span className="flex items-center gap-1"><span className="h-1.5 w-4 rounded bg-green-600" /> Open</span>
-            <span className="flex items-center gap-1"><span className="h-1.5 w-4 rounded bg-yellow-500" /> Low risk</span>
-            <span className="flex items-center gap-1"><span className="h-1.5 w-4 rounded bg-orange-500" /> Moderate</span>
-            <span className="flex items-center gap-1"><span className="h-1.5 w-4 rounded bg-red-600" /> High risk</span>
-          </div>
         </div>
 
-        {/* Prediction status */}
-        {predictionStatus !== "idle" && (
-          <div className={`mb-3 rounded-lg px-3 py-2 text-xs ${
-            predictionStatus === "loading" ? "bg-blue-50 text-blue-700" :
-            predictionStatus === "ready" ? "bg-green-50 text-green-700" :
-            "bg-red-50 text-red-700"
-          }`}>
-            {predictionStatus === "loading" && "Running ML prediction model..."}
-            {predictionStatus === "ready" && weatherParams && (
-              <>Predictions ready: {weatherParams.snowfall_cm}cm snow, {weatherParams.min_temp_c}°C, {weatherParams.duration_days}d storm</>
-            )}
-            {predictionStatus === "error" && "Prediction failed — showing fallback data"}
+        {/* Overall risk badge */}
+        <div className={`mb-3 rounded-xl px-3 py-2.5 text-center ${overallRisk.bg}`}>
+          <div className={`text-lg font-bold ${overallRisk.text}`}>{overallRisk.label}</div>
+          {loading && <div className="text-xs text-slate-400 mt-0.5">Updating...</div>}
+        </div>
+
+        {/* Prediction status (loading + error only) */}
+        {predictionStatus === "loading" && (
+          <div className="mb-3 rounded-lg px-3 py-2 text-xs bg-blue-50 text-blue-700">
+            Running ML prediction model...
+          </div>
+        )}
+        {predictionStatus === "error" && (
+          <div className="mb-3 rounded-lg px-3 py-2 text-xs bg-red-50 text-red-700">
+            Prediction failed — showing fallback data
           </div>
         )}
 
-        {/* Status cards */}
-        <div className="grid grid-cols-4 gap-2 text-sm">
-          <StatusCard label="Open" count={counts.open} bgClass="bg-green-50" textClass="text-green-800" />
-          <StatusCard label="Low risk" count={counts.low_risk} bgClass="bg-yellow-50" textClass="text-yellow-800" />
-          <StatusCard label="Moderate" count={counts.moderate_risk} bgClass="bg-orange-50" textClass="text-orange-800" />
-          <StatusCard label="High risk" count={counts.closed} bgClass="bg-red-50" textClass="text-red-800" />
-        </div>
-
-        {/* Status bar */}
-        <div className="mt-4 space-y-1 text-xs text-slate-600">
-          <div>Visible segments: {totalVisible}</div>
-          <div>
-            {loading ? "Refreshing..." : "Map synced to viewport"}
-            {previewDay > 0 && (
-              <span className="ml-1 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-                +{previewDay}d forecast
-              </span>
-            )}
+        {/* Error */}
+        {error && (
+          <div className="mb-3 rounded-lg px-3 py-2 text-xs bg-red-50 text-red-700 truncate" title={error}>
+            {error}
           </div>
-          {lastUpdated ? <div>Updated: {new Date(lastUpdated).toLocaleTimeString()}</div> : null}
-          <div className="h-4 truncate text-red-700" title={error ?? ""}>{error ?? "\u00A0"}</div>
-        </div>
+        )}
 
         {/* Navigation */}
         <NavigationPanel mapRef={mapRef} mapPadding={padding} dayOffset={dayOffset} />

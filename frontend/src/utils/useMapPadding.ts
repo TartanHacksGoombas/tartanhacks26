@@ -5,15 +5,15 @@ export type MapPadding = { top: number; right: number; bottom: number; left: num
 const BASE_PADDING = 40;
 
 /**
- * Dynamically measures UI overlays (sidebar, weather bar) and returns
+ * Dynamically measures UI overlays (sidebar, top bar) and returns
  * the padding the map should use so content isn't hidden behind them.
  * Uses ResizeObserver for live updates when panels expand/collapse.
  *
- * Returns callback refs — pass them as `ref={sidebarRef}` / `ref={weatherRef}`.
+ * Returns callback refs — pass them as `ref={sidebarRef}` / `ref={topBarRef}`.
  */
 export function useMapPadding() {
   const sidebarEl = useRef<HTMLElement | null>(null);
-  const weatherEl = useRef<HTMLDivElement | null>(null);
+  const topBarEl = useRef<HTMLDivElement | null>(null);
   const observerRef = useRef<ResizeObserver | null>(null);
 
   const [padding, setPadding] = useState<MapPadding>({
@@ -25,21 +25,21 @@ export function useMapPadding() {
 
   const recalc = useCallback(() => {
     const sidebar = sidebarEl.current;
-    const weather = weatherEl.current;
+    const topBar = topBarEl.current;
 
     // Left: sidebar covers the full left edge
     const left = sidebar
       ? sidebar.offsetLeft + sidebar.offsetWidth + BASE_PADDING
       : BASE_PADDING;
 
-    // Top: weather bar covers the top — push content below it
-    const top = weather
-      ? weather.offsetTop + weather.offsetHeight + BASE_PADDING
+    // Top: top bar covers the top — push content below it
+    const top = topBar
+      ? topBar.offsetTop + topBar.offsetHeight + BASE_PADDING
       : BASE_PADDING;
 
-    // Right: the weather bar only occupies the top-right *corner*, not the
+    // Right: the top bar only occupies the top-right *corner*, not the
     // full right edge. The top padding already pushes content below it, so
-    // we only need a small right margin.  Don't use the weather bar width
+    // we only need a small right margin.  Don't use the top bar width
     // here — that makes the total horizontal padding exceed the map width.
     const right = BASE_PADDING;
 
@@ -54,7 +54,7 @@ export function useMapPadding() {
     if (observerRef.current) observerRef.current.disconnect();
     const obs = new ResizeObserver(recalc);
     if (sidebarEl.current) obs.observe(sidebarEl.current);
-    if (weatherEl.current) obs.observe(weatherEl.current);
+    if (topBarEl.current) obs.observe(topBarEl.current);
     observerRef.current = obs;
     recalc();
   }, [recalc]);
@@ -68,10 +68,10 @@ export function useMapPadding() {
     [rebuildObserver]
   );
 
-  // Callback ref for weather bar
-  const weatherRef = useCallback(
+  // Callback ref for top bar
+  const topBarRef = useCallback(
     (node: HTMLDivElement | null) => {
-      weatherEl.current = node;
+      topBarEl.current = node;
       rebuildObserver();
     },
     [rebuildObserver]
@@ -88,5 +88,5 @@ export function useMapPadding() {
     return () => observerRef.current?.disconnect();
   }, []);
 
-  return { sidebarRef, weatherRef, padding };
+  return { sidebarRef, topBarRef, padding };
 }
