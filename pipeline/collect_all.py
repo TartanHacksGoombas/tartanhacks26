@@ -58,7 +58,8 @@ def main():
 
     # Phase B — Environmental Risk Factors (sequential, needs Phase A)
     print("\n>>> PHASE B: Environmental Risk Factors")
-    for script in ["collect_elevation", "collect_slopes", "collect_bridges", "collect_landslides"]:
+    for script in ["collect_elevation", "collect_slopes", "collect_bridges", "collect_landslides",
+                    "collect_snow_emergency_routes"]:
         results[script] = run_script(script)
 
     # Phase C — Weather Data
@@ -68,7 +69,9 @@ def main():
 
     # Phase D — Historical Incident Data
     print("\n>>> PHASE D: Historical Incident Data")
-    for script in ["collect_crashes", "collect_311_snow", "collect_plow_activity", "collect_penndot_snow_routes"]:
+    for script in ["collect_crashes", "collect_311_snow", "collect_plow_activity", "collect_penndot_snow_routes",
+                    "collect_domi_closures",
+                    "collect_511pa_events", "collect_penndot_press"]:
         results[script] = run_script(script)
 
     # Phase E — Master Join
@@ -103,6 +106,10 @@ def main():
         ("311_snow_pgh.csv", "311 snow complaints"),
         ("plow_activity_pgh.csv", "plow GPS traces"),
         ("penndot_snow_routes_pgh.csv", "PennDOT routes"),
+        ("domi_closures_pgh.csv", "~63,000 permitted closures"),
+        ("snow_emergency_routes_pgh.csv", "~286 route segments"),
+        ("511pa_events_pgh.csv", "511PA traffic events"),
+        ("penndot_press_closures_pgh.csv", "press release closures"),
         ("dataset_prediction_ready.csv", "~19,000 rows, ~30 cols"),
     ]
 
