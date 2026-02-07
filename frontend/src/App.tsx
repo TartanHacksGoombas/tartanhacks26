@@ -420,7 +420,6 @@ export default function App() {
         {/* Overall risk badge */}
         <div className={`mb-3 rounded-xl px-3 py-2.5 text-center ${overallRisk.bg}`}>
           <div className={`text-lg font-bold ${overallRisk.text}`}>{overallRisk.label}</div>
-          {loading && <div className="text-xs text-slate-400 mt-0.5">Updating...</div>}
         </div>
 
         {/* Prediction status (loading + error only) */}

@@ -248,8 +248,8 @@ const UnifiedDayBar = forwardRef<HTMLDivElement, UnifiedDayBarProps>(function Un
               <span className="text-xs font-semibold text-slate-800">
                 {g.day.temperature}°
               </span>
-              <span className="text-[9px] font-medium" style={{ color: precipColor(maxPrecip, worstForecast) }}>
-                {maxPrecip}%
+              <span className="text-[9px] font-medium text-slate-400">
+                💧{maxPrecip}%
               </span>
             </button>
           );
