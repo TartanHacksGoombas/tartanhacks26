@@ -1,0 +1,15 @@
+node_modules
+dist
+.DS_Store
+.env
+.env.local
+coverage
+*.log
+
+# Frontend build artifacts
+frontend/node_modules
+frontend/dist
+
+# Backend build artifacts
+backend/node_modules
+backend/dist
