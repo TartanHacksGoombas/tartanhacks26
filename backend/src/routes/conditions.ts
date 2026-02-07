@@ -27,7 +27,7 @@ function riskCategoryToLabel(riskCategory: string): SegmentStatusLabel {
     case "very_low": return "open";
     case "low": return "low_risk";
     case "moderate": return "moderate_risk";
-    case "high":
+    case "high": return "high_risk";
     case "very_high": return "closed";
     default: return "open";
   }

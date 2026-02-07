@@ -17,6 +17,7 @@ type StatusCounts = {
   open: number;
   low_risk: number;
   moderate_risk: number;
+  high_risk: number;
   closed: number;
 };
 
@@ -61,7 +62,7 @@ export default function App() {
   const [dayOffset, setDayOffset] = useState(0);
   const [mapReady, setMapReady] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [counts, setCounts] = useState<StatusCounts>({ open: 0, low_risk: 0, moderate_risk: 0, closed: 0 });
+  const [counts, setCounts] = useState<StatusCounts>({ open: 0, low_risk: 0, moderate_risk: 0, high_risk: 0, closed: 0 });
   const [error, setError] = useState<string | null>(null);
   const [predictionStatus, setPredictionStatus] = useState<PredictionStatus>("idle");
   const [weatherParams, setWeatherParams] = useState<WeatherParams | null>(null);
@@ -70,9 +71,9 @@ export default function App() {
   const pendingLocationRef = useRef<{ lng: number; lat: number; accuracy: number } | null>(null);
 
   const overallRisk = useMemo(() => {
-    const total = counts.open + counts.low_risk + counts.moderate_risk + counts.closed;
+    const total = counts.open + counts.low_risk + counts.moderate_risk + counts.high_risk + counts.closed;
     if (total === 0) return { label: "No Data", bg: "bg-slate-100", text: "text-slate-600" };
-    const highPct = counts.closed / total;
+    const highPct = (counts.high_risk + counts.closed) / total;
     const modPct = counts.moderate_risk / total;
     if (highPct > 0.15) return { label: "High Risk", bg: "bg-red-50", text: "text-red-700" };
     if (highPct > 0.05 || modPct > 0.20) return { label: "Moderate Risk", bg: "bg-orange-50", text: "text-orange-700" };
@@ -217,12 +218,14 @@ export default function App() {
       map.addSource(SOURCE_ID, { type: "geojson", data: emptyGeoJson });
 
       const conditionColor: maplibregl.ExpressionSpecification = [
-        "match", ["get", "label"],
-        "open", "#16a34a",
-        "low_risk", "#eab308",
-        "moderate_risk", "#f97316",
-        "closed", "#dc2626",
-        "#64748b"
+        "interpolate", ["linear"],
+        ["coalesce", ["get", "closureProbability"], 0],
+        0.00, "#16a34a",
+        0.05, "#65a30d",
+        0.15, "#eab308",
+        0.35, "#f97316",
+        0.55, "#dc2626",
+        0.80, "#7f1d1d",
       ];
 
       // Major roads — always visible
@@ -364,10 +367,11 @@ export default function App() {
             if (l === "open") acc.open += 1;
             else if (l === "low_risk") acc.low_risk += 1;
             else if (l === "moderate_risk") acc.moderate_risk += 1;
+            else if (l === "high_risk") acc.high_risk += 1;
             else if (l === "closed") acc.closed += 1;
             return acc;
           },
-          { open: 0, low_risk: 0, moderate_risk: 0, closed: 0 } as StatusCounts
+          { open: 0, low_risk: 0, moderate_risk: 0, high_risk: 0, closed: 0 } as StatusCounts
         );
         setCounts(nextCounts);
       } catch (loadError) {

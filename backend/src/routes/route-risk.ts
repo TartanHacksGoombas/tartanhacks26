@@ -89,10 +89,10 @@ routeRiskRouter.post("/route-risk", async (req, res) => {
 });
 
 function categorize(score: number): string {
-  if (score < 0.15) return "very_low";
-  if (score < 0.35) return "low";
-  if (score < 0.55) return "moderate";
-  if (score < 0.75) return "high";
+  if (score < 0.05) return "very_low";
+  if (score < 0.15) return "low";
+  if (score < 0.35) return "moderate";
+  if (score < 0.55) return "high";
   return "very_high";
 }
 
@@ -101,6 +101,7 @@ function riskCatToLabel(cat: string): string {
     case "very_low": return "open";
     case "low": return "low_risk";
     case "moderate": return "moderate_risk";
+    case "high": return "high_risk";
     default: return "closed";
   }
 }
